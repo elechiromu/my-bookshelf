@@ -181,11 +181,13 @@ export default function BookshelfApp() {
 
     setIsSearching(true);
     try {
-      // OpenBDで検索
-      const response = await fetch(`https://api.openbd.jp/v1/get?isbn=${cleanIsbn}`);
+      // ISBN-13に変換
+      const isbn13 = cleanIsbn.length === 10 ? convertIsbn10to13(cleanIsbn) : cleanIsbn;
+      
+      // OpenBDで検索（ISBN-13で）
+      const response = await fetch(`https://api.openbd.jp/v1/get?isbn=${isbn13}`);
       const data = await response.json();
       
-      let cover = '';
       let title = '';
       let author = '';
       let publisher = '';
@@ -196,19 +198,16 @@ export default function BookshelfApp() {
         title = bookData.title || '';
         author = bookData.author || '';
         publisher = bookData.publisher || '';
-        cover = bookData.cover || '';
         pubdate = bookData.pubdate || '';
       }
 
-      // OpenBDで画像がなければ他のAPIから取得
-      if (!cover) {
-        cover = await fetchBookCover(cleanIsbn);
-      }
+      // 画像は常に国立国会図書館を優先
+      const cover = `https://ndlsearch.ndl.go.jp/thumbnail/${isbn13}.jpg`;
 
       // タイトルが取れていれば検索成功
       if (title) {
         setSearchResult({
-          isbn: cleanIsbn,
+          isbn: isbn13,
           title,
           author,
           publisher,
@@ -217,29 +216,27 @@ export default function BookshelfApp() {
         });
       } else {
         // OpenBDで見つからなければGoogle Booksから情報取得を試みる
-        const googleResponse = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${cleanIsbn}`);
+        const googleResponse = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn13}`);
         const googleData = await googleResponse.json();
         
         if (googleData.items && googleData.items[0]) {
           const volumeInfo = googleData.items[0].volumeInfo;
-          // 画像も取得
-          const bookCover = await fetchBookCover(cleanIsbn);
           setSearchResult({
-            isbn: cleanIsbn,
+            isbn: isbn13,
             title: volumeInfo.title || '',
             author: volumeInfo.authors?.join(', ') || '',
             publisher: volumeInfo.publisher || '',
-            cover: bookCover,
+            cover: cover, // 国立国会図書館のURLを使用
             pubdate: volumeInfo.publishedDate || ''
           });
         } else {
           alert('本が見つかりませんでした。手動で入力してください。');
           setSearchResult({
-            isbn: cleanIsbn,
+            isbn: isbn13,
             title: '',
             author: '',
             publisher: '',
-            cover: '',
+            cover: cover, // 国立国会図書館のURLを使用
             pubdate: ''
           });
         }
