@@ -108,6 +108,25 @@ export default function BookshelfApp() {
     }
   };
 
+  // 国立国会図書館の書影URLを生成
+  const getNdlCoverUrl = (isbn) => {
+    return `https://ndlsearch.ndl.go.jp/thumbnail/${isbn}.jpg`;
+  };
+
+  // 画像URLが有効か確認
+  const checkImageUrl = (url) => {
+    return new Promise((resolve) => {
+      if (!url) {
+        resolve('');
+        return;
+      }
+      const img = new Image();
+      img.onload = () => resolve(url);
+      img.onerror = () => resolve('');
+      img.src = url;
+    });
+  };
+
   // Google Books APIで表紙画像を取得
   const fetchGoogleBooksCover = async (isbn) => {
     try {
@@ -125,7 +144,24 @@ export default function BookshelfApp() {
     }
   };
 
-  // OpenBD + Google Books APIで本を検索
+  // 複数のソースから画像を取得
+  const fetchBookCover = async (isbn) => {
+    // 1. 国立国会図書館（日本の本に強い）
+    const ndlUrl = getNdlCoverUrl(isbn);
+    const ndlResult = await checkImageUrl(ndlUrl);
+    if (ndlResult) return ndlResult;
+
+    // 2. Google Books
+    const googleUrl = await fetchGoogleBooksCover(isbn);
+    if (googleUrl) {
+      const googleResult = await checkImageUrl(googleUrl);
+      if (googleResult) return googleResult;
+    }
+
+    return '';
+  };
+
+  // OpenBD + 複数APIで本を検索
   const searchBook = async (isbnCode) => {
     const cleanIsbn = isbnCode.replace(/[-\s]/g, '');
     if (!/^\d{10}$|^\d{13}$/.test(cleanIsbn)) {
@@ -154,9 +190,15 @@ export default function BookshelfApp() {
         pubdate = bookData.pubdate || '';
       }
 
-      // OpenBDで画像がなければGoogle Booksから取得
+      // OpenBDで画像がなければ他のAPIから取得
       if (!cover) {
-        cover = await fetchGoogleBooksCover(cleanIsbn);
+        cover = await fetchBookCover(cleanIsbn);
+      } else {
+        // OpenBDの画像が有効か確認
+        const validCover = await checkImageUrl(cover);
+        if (!validCover) {
+          cover = await fetchBookCover(cleanIsbn);
+        }
       }
 
       // タイトルが取れていれば検索成功
@@ -176,13 +218,14 @@ export default function BookshelfApp() {
         
         if (googleData.items && googleData.items[0]) {
           const volumeInfo = googleData.items[0].volumeInfo;
-          const thumbnail = volumeInfo.imageLinks?.thumbnail || '';
+          // 画像も取得
+          const bookCover = await fetchBookCover(cleanIsbn);
           setSearchResult({
             isbn: cleanIsbn,
             title: volumeInfo.title || '',
             author: volumeInfo.authors?.join(', ') || '',
             publisher: volumeInfo.publisher || '',
-            cover: thumbnail.replace('zoom=1', 'zoom=2').replace('http://', 'https://'),
+            cover: bookCover,
             pubdate: volumeInfo.publishedDate || ''
           });
         } else {
@@ -544,7 +587,7 @@ export default function BookshelfApp() {
                       }}>
                         {book.cover ? (
                           <img 
-                            src={book.cover} 
+                            src={book.cover} referrerPolicy="no-referrer" 
                             alt={book.title}
                             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                           />
@@ -643,7 +686,7 @@ export default function BookshelfApp() {
                       }}>
                         {book.cover ? (
                           <img 
-                            src={book.cover} 
+                            src={book.cover} referrerPolicy="no-referrer" 
                             alt={book.title}
                             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                           />
@@ -768,7 +811,7 @@ export default function BookshelfApp() {
                     }}>
                       {book.cover ? (
                         <img 
-                          src={book.cover} 
+                          src={book.cover} referrerPolicy="no-referrer" 
                           alt={book.title}
                           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                         />
@@ -1081,7 +1124,7 @@ function SearchResultCard({ result, onAdd, onCancel }) {
           }}>
             {editedResult.cover ? (
               <img 
-                src={editedResult.cover} 
+                src={editedResult.cover} referrerPolicy="no-referrer" 
                 alt="表紙"
                 style={{ width: '100%', height: '100%', objectFit: 'cover' }}
               />
@@ -1258,7 +1301,7 @@ function BookDetailModal({ book, isEditMode, onClose, onEdit, onSave, onDelete }
           }}>
             {editedBook.cover ? (
               <img 
-                src={editedBook.cover} 
+                src={editedBook.cover} referrerPolicy="no-referrer" 
                 alt={editedBook.title}
                 style={{ width: '100%', height: '100%', objectFit: 'cover' }}
               />
