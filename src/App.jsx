@@ -108,23 +108,21 @@ export default function BookshelfApp() {
     }
   };
 
-  // 国立国会図書館の書影URLを生成
-  const getNdlCoverUrl = (isbn) => {
-    return `https://ndlsearch.ndl.go.jp/thumbnail/${isbn}.jpg`;
-  };
-
-  // 画像URLが有効か確認
-  const checkImageUrl = (url) => {
-    return new Promise((resolve) => {
-      if (!url) {
-        resolve('');
-        return;
-      }
-      const img = new Image();
-      img.onload = () => resolve(url);
-      img.onerror = () => resolve('');
-      img.src = url;
-    });
+  // ISBN-10をISBN-13に変換
+  const convertIsbn10to13 = (isbn10) => {
+    if (isbn10.length !== 10) return isbn10;
+    
+    // 先頭に978を付けて、最後のチェックディジットを除く
+    const isbn12 = '978' + isbn10.slice(0, 9);
+    
+    // 新しいチェックディジットを計算
+    let sum = 0;
+    for (let i = 0; i < 12; i++) {
+      sum += parseInt(isbn12[i]) * (i % 2 === 0 ? 1 : 3);
+    }
+    const checkDigit = (10 - (sum % 10)) % 10;
+    
+    return isbn12 + checkDigit;
   };
 
   // Google Books APIで表紙画像を取得
@@ -146,19 +144,31 @@ export default function BookshelfApp() {
 
   // 複数のソースから画像を取得
   const fetchBookCover = async (isbn) => {
-    // 1. 国立国会図書館（日本の本に強い）
-    const ndlUrl = getNdlCoverUrl(isbn);
-    const ndlResult = await checkImageUrl(ndlUrl);
-    if (ndlResult) return ndlResult;
-
-    // 2. Google Books
-    const googleUrl = await fetchGoogleBooksCover(isbn);
-    if (googleUrl) {
-      const googleResult = await checkImageUrl(googleUrl);
-      if (googleResult) return googleResult;
+    // ISBNを10桁と13桁の両方用意
+    const isbn13 = isbn.length === 10 ? convertIsbn10to13(isbn) : isbn;
+    
+    // 1. 国立国会図書館（13桁）- 日本の本に最も強い
+    const ndlUrl = `https://ndlsearch.ndl.go.jp/thumbnail/${isbn13}.jpg`;
+    
+    // 2. OpenBDの画像を試す
+    try {
+      const response = await fetch(`https://api.openbd.jp/v1/get?isbn=${isbn13}`);
+      const data = await response.json();
+      if (data && data[0]?.summary?.cover) {
+        return data[0].summary.cover;
+      }
+    } catch (e) {
+      console.log('OpenBD error:', e);
     }
 
-    return '';
+    // 3. Google Booksを試す
+    const googleCover = await fetchGoogleBooksCover(isbn13);
+    if (googleCover) {
+      return googleCover;
+    }
+
+    // 4. 国立国会図書館のURLを返す（存在確認せず）
+    return ndlUrl;
   };
 
   // OpenBD + 複数APIで本を検索
@@ -193,12 +203,6 @@ export default function BookshelfApp() {
       // OpenBDで画像がなければ他のAPIから取得
       if (!cover) {
         cover = await fetchBookCover(cleanIsbn);
-      } else {
-        // OpenBDの画像が有効か確認
-        const validCover = await checkImageUrl(cover);
-        if (!validCover) {
-          cover = await fetchBookCover(cleanIsbn);
-        }
       }
 
       // タイトルが取れていれば検索成功
