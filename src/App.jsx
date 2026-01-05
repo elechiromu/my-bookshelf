@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, LabelList } from 'recharts';
-import { Book, Plus, Search, Star, X, ChevronLeft, ChevronRight, BookOpen, Library, BarChart3, Edit3, Trash2, LogIn, LogOut, User, Loader } from 'lucide-react';
+import { Book, Plus, Search, Star, X, ChevronLeft, ChevronRight, BookOpen, Library, BarChart3, Edit3, Trash2, LogIn, LogOut, User, Loader, Camera } from 'lucide-react';
+import { Html5Qrcode } from 'html5-qrcode';
 
 // Firebase imports
 import { initializeApp } from 'firebase/app';
@@ -58,6 +59,7 @@ export default function BookshelfApp() {
   const [isbn, setIsbn] = useState('');
   const [statsYear, setStatsYear] = useState(new Date().getFullYear());
   const [filterStatus, setFilterStatus] = useState('all');
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
 
   // 認証状態の監視
   useEffect(() => {
@@ -1016,6 +1018,42 @@ export default function BookshelfApp() {
               本を追加
             </h2>
 
+            {/* バーコードスキャンボタン */}
+            <button
+              onClick={() => setIsScannerOpen(true)}
+              style={{
+                width: '100%',
+                padding: '16px',
+                marginBottom: '24px',
+                background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+                color: 'white',
+                border: 'none',
+                borderRadius: '12px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '12px',
+                fontSize: '16px',
+                fontWeight: '600',
+                boxShadow: '0 4px 15px rgba(59, 130, 246, 0.3)'
+              }}
+            >
+              <Camera size={24} />
+              バーコードをスキャン
+            </button>
+
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '16px',
+              marginBottom: '24px'
+            }}>
+              <div style={{ flex: 1, height: '1px', background: '#e5e7eb' }} />
+              <span style={{ color: '#9ca3af', fontSize: '14px' }}>または</span>
+              <div style={{ flex: 1, height: '1px', background: '#e5e7eb' }} />
+            </div>
+
             {/* ISBN検索 */}
             <div style={{ marginBottom: '24px' }}>
               <label style={{ 
@@ -1090,6 +1128,18 @@ export default function BookshelfApp() {
           onEdit={() => setIsEditMode(true)}
           onSave={updateBook}
           onDelete={deleteBook}
+        />
+      )}
+
+      {/* バーコードスキャンモーダル */}
+      {isScannerOpen && (
+        <BarcodeScanner
+          onScan={(scannedIsbn) => {
+            setIsbn(scannedIsbn);
+            setIsScannerOpen(false);
+            searchBook(scannedIsbn);
+          }}
+          onClose={() => setIsScannerOpen(false)}
         />
       )}
     </div>
@@ -1569,6 +1619,208 @@ function BookDetailModal({ book, isEditMode, onClose, onEdit, onSave, onDelete }
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// バーコードスキャナーコンポーネント
+function BarcodeScanner({ onScan, onClose }) {
+  const [error, setError] = useState('');
+  const [isStarting, setIsStarting] = useState(true);
+  const scannerRef = useRef(null);
+  const html5QrCodeRef = useRef(null);
+
+  useEffect(() => {
+    const startScanner = async () => {
+      try {
+        html5QrCodeRef.current = new Html5Qrcode("barcode-reader");
+        
+        await html5QrCodeRef.current.start(
+          { facingMode: "environment" },
+          {
+            fps: 10,
+            qrbox: { width: 280, height: 150 },
+            aspectRatio: 1.777,
+          },
+          (decodedText) => {
+            // ISBNバーコードは978または979で始まる13桁
+            const cleanCode = decodedText.replace(/[^0-9]/g, '');
+            if (cleanCode.length === 13 && (cleanCode.startsWith('978') || cleanCode.startsWith('979'))) {
+              // 成功時にバイブレーション（対応デバイスのみ）
+              if (navigator.vibrate) {
+                navigator.vibrate(100);
+              }
+              stopScanner();
+              onScan(cleanCode);
+            } else if (cleanCode.length === 10) {
+              // ISBN-10も対応
+              if (navigator.vibrate) {
+                navigator.vibrate(100);
+              }
+              stopScanner();
+              onScan(cleanCode);
+            }
+          },
+          () => {} // エラーは無視（スキャン継続）
+        );
+        setIsStarting(false);
+      } catch (err) {
+        console.error('Scanner error:', err);
+        setError('カメラを起動できませんでした。カメラへのアクセスを許可してください。');
+        setIsStarting(false);
+      }
+    };
+
+    const stopScanner = async () => {
+      if (html5QrCodeRef.current) {
+        try {
+          await html5QrCodeRef.current.stop();
+          html5QrCodeRef.current.clear();
+        } catch (e) {
+          console.log('Scanner already stopped');
+        }
+      }
+    };
+
+    startScanner();
+
+    return () => {
+      stopScanner();
+    };
+  }, [onScan]);
+
+  const handleClose = async () => {
+    if (html5QrCodeRef.current) {
+      try {
+        await html5QrCodeRef.current.stop();
+        html5QrCodeRef.current.clear();
+      } catch (e) {
+        console.log('Scanner cleanup');
+      }
+    }
+    onClose();
+  };
+
+  return (
+    <div style={{
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(0,0,0,0.9)',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 1000,
+      padding: '20px'
+    }}>
+      {/* 閉じるボタン */}
+      <button
+        onClick={handleClose}
+        style={{
+          position: 'absolute',
+          top: '20px',
+          right: '20px',
+          background: 'rgba(255,255,255,0.2)',
+          border: 'none',
+          borderRadius: '50%',
+          width: '44px',
+          height: '44px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer',
+          color: 'white'
+        }}
+      >
+        <X size={24} />
+      </button>
+
+      <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+        <h2 style={{ color: 'white', fontSize: '20px', fontWeight: '600', marginBottom: '8px' }}>
+          バーコードをスキャン
+        </h2>
+        <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: '14px' }}>
+          本の裏表紙にあるバーコードを枠内に合わせてください
+        </p>
+      </div>
+
+      {/* スキャナー領域 */}
+      <div style={{
+        width: '100%',
+        maxWidth: '400px',
+        borderRadius: '16px',
+        overflow: 'hidden',
+        background: '#000'
+      }}>
+        {isStarting && (
+          <div style={{
+            padding: '60px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'white'
+          }}>
+            <Loader size={32} style={{ animation: 'spin 1s linear infinite', marginBottom: '12px' }} />
+            <span>カメラを起動中...</span>
+          </div>
+        )}
+        
+        {error ? (
+          <div style={{
+            padding: '40px 20px',
+            textAlign: 'center',
+            color: '#f87171'
+          }}>
+            <p style={{ marginBottom: '16px' }}>{error}</p>
+            <button
+              onClick={handleClose}
+              style={{
+                padding: '10px 20px',
+                background: '#1e3a5f',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                cursor: 'pointer'
+              }}
+            >
+              閉じる
+            </button>
+          </div>
+        ) : (
+          <div 
+            id="barcode-reader" 
+            ref={scannerRef}
+            style={{ width: '100%' }}
+          />
+        )}
+      </div>
+
+      <p style={{ 
+        color: 'rgba(255,255,255,0.5)', 
+        fontSize: '12px', 
+        marginTop: '20px',
+        textAlign: 'center'
+      }}>
+        978または979で始まるISBNバーコードを認識します
+      </p>
+
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        #barcode-reader video {
+          width: 100% !important;
+          border-radius: 8px;
+        }
+        #barcode-reader__scan_region {
+          background: transparent !important;
+        }
+        #barcode-reader__dashboard {
+          display: none !important;
+        }
+      `}</style>
     </div>
   );
 }
