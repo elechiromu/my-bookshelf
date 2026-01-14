@@ -998,6 +998,173 @@ export default function BookshelfApp() {
                 </span>
               </div>
             </div>
+
+            {/* 月別読了本一覧 */}
+            <div style={{
+              background: 'white',
+              borderRadius: '16px',
+              padding: '24px',
+              boxShadow: '0 4px 20px rgba(0,0,0,0.08)',
+              marginTop: '24px'
+            }}>
+              <h2 style={{ 
+                fontSize: '18px', 
+                fontWeight: '600', 
+                color: '#1f2937',
+                marginBottom: '20px'
+              }}>
+                {statsYear}年の読了本
+              </h2>
+
+              {(() => {
+                const completedBooks = books.filter(book => {
+                  if (!book.endDate || book.status !== STATUS.COMPLETED) return false;
+                  const endDate = new Date(book.endDate);
+                  return endDate.getFullYear() === statsYear;
+                });
+
+                if (completedBooks.length === 0) {
+                  return (
+                    <p style={{ color: '#9ca3af', textAlign: 'center', padding: '20px' }}>
+                      この年に読了した本はありません
+                    </p>
+                  );
+                }
+
+                // 月ごとにグループ化
+                const monthNames = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
+                const booksByMonth = {};
+                
+                completedBooks.forEach(book => {
+                  const month = new Date(book.endDate).getMonth();
+                  if (!booksByMonth[month]) {
+                    booksByMonth[month] = [];
+                  }
+                  booksByMonth[month].push(book);
+                });
+
+                // 月を降順でソート（最新の月から）
+                const sortedMonths = Object.keys(booksByMonth)
+                  .map(Number)
+                  .sort((a, b) => b - a);
+
+                return sortedMonths.map(month => (
+                  <div key={month} style={{ marginBottom: '24px' }}>
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      marginBottom: '12px'
+                    }}>
+                      <span style={{
+                        background: '#3b82f6',
+                        color: 'white',
+                        padding: '4px 12px',
+                        borderRadius: '12px',
+                        fontSize: '13px',
+                        fontWeight: '600'
+                      }}>
+                        {monthNames[month]}
+                      </span>
+                      <span style={{ color: '#6b7280', fontSize: '13px' }}>
+                        {booksByMonth[month].length}冊
+                      </span>
+                    </div>
+                    
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {booksByMonth[month]
+                        .sort((a, b) => new Date(b.endDate) - new Date(a.endDate))
+                        .map(book => (
+                          <div
+                            key={book.id}
+                            onClick={() => { setSelectedBook(book); setIsModalOpen(true); }}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '12px',
+                              padding: '12px',
+                              background: '#f8fafc',
+                              borderRadius: '8px',
+                              cursor: 'pointer',
+                              transition: 'background 0.2s'
+                            }}
+                            onMouseEnter={e => e.currentTarget.style.background = '#f1f5f9'}
+                            onMouseLeave={e => e.currentTarget.style.background = '#f8fafc'}
+                          >
+                            {/* 小さい表紙 */}
+                            <div style={{
+                              width: '40px',
+                              height: '60px',
+                              borderRadius: '4px',
+                              overflow: 'hidden',
+                              flexShrink: 0,
+                              background: book.cover ? '#fff' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+                            }}>
+                              {book.cover ? (
+                                <img 
+                                  src={book.cover} 
+                                  referrerPolicy="no-referrer"
+                                  alt=""
+                                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                />
+                              ) : (
+                                <div style={{
+                                  height: '100%',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center'
+                                }}>
+                                  <Book size={16} color="white" />
+                                </div>
+                              )}
+                            </div>
+                            
+                            {/* タイトルと著者 */}
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <p style={{
+                                fontSize: '14px',
+                                fontWeight: '600',
+                                color: '#1f2937',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap'
+                              }}>
+                                {book.title}
+                              </p>
+                              <p style={{
+                                fontSize: '12px',
+                                color: '#6b7280',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap'
+                              }}>
+                                {book.author}
+                              </p>
+                            </div>
+
+                            {/* 評価 */}
+                            {book.rating > 0 && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+                                <Star size={14} fill="#fbbf24" stroke="#fbbf24" />
+                                <span style={{ fontSize: '12px', color: '#6b7280' }}>{book.rating}</span>
+                              </div>
+                            )}
+
+                            {/* 読了日 */}
+                            <span style={{ 
+                              fontSize: '11px', 
+                              color: '#9ca3af',
+                              flexShrink: 0
+                            }}>
+                              {new Date(book.endDate).getDate()}日
+                            </span>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                ));
+              })()}
+            </div>
           </div>
         )}
 
