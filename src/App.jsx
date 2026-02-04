@@ -17,6 +17,9 @@ const firebaseConfig = {
   appId: "1:373826584634:web:16c5961e24de9dcdc03503"
 };
 
+// 楽天API設定
+const RAKUTEN_APP_ID = "1009573082361123761";
+
 // Firebase初期化
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -122,7 +125,76 @@ export default function BookshelfApp() {
     return isbn12 + checkDigit;
   };
 
-  // 本を検索
+  // 楽天ブックスAPIで本を検索
+  const searchRakuten = async (isbn) => {
+    try {
+      const response = await fetch(
+        `https://app.rakuten.co.jp/services/api/BooksBook/Search/20170404?applicationId=${RAKUTEN_APP_ID}&isbn=${isbn}&format=json`
+      );
+      const data = await response.json();
+      if (data.Items && data.Items.length > 0) {
+        const book = data.Items[0].Item;
+        return {
+          title: book.title || '',
+          author: book.author || '',
+          publisher: book.publisherName || '',
+          cover: book.largeImageUrl || book.mediumImageUrl || book.smallImageUrl || '',
+          pubdate: book.salesDate || ''
+        };
+      }
+      return null;
+    } catch (error) {
+      console.error('楽天API error:', error);
+      return null;
+    }
+  };
+
+  // OpenBD APIで本を検索
+  const searchOpenBD = async (isbn) => {
+    try {
+      const response = await fetch(`https://api.openbd.jp/v1/get?isbn=${isbn}`);
+      const data = await response.json();
+      if (data && data[0]) {
+        const bookData = data[0].summary;
+        return {
+          title: bookData.title || '',
+          author: bookData.author || '',
+          publisher: bookData.publisher || '',
+          cover: bookData.cover || '',
+          pubdate: bookData.pubdate || ''
+        };
+      }
+      return null;
+    } catch (error) {
+      console.error('OpenBD error:', error);
+      return null;
+    }
+  };
+
+  // Google Books APIで本を検索
+  const searchGoogleBooks = async (isbn) => {
+    try {
+      const response = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`);
+      const data = await response.json();
+      if (data.items && data.items[0]) {
+        const volumeInfo = data.items[0].volumeInfo;
+        const thumbnail = volumeInfo.imageLinks?.thumbnail || '';
+        return {
+          title: volumeInfo.title || '',
+          author: volumeInfo.authors?.join(', ') || '',
+          publisher: volumeInfo.publisher || '',
+          cover: thumbnail.replace('http://', 'https://'),
+          pubdate: volumeInfo.publishedDate || ''
+        };
+      }
+      return null;
+    } catch (error) {
+      console.error('Google Books error:', error);
+      return null;
+    }
+  };
+
+  // 本を検索（複数API）
   const searchBook = async (isbnCode) => {
     const cleanIsbn = isbnCode.replace(/[-\s]/g, '');
     if (!/^\d{10}$|^\d{13}$/.test(cleanIsbn)) {
@@ -134,44 +206,62 @@ export default function BookshelfApp() {
     try {
       const isbn13 = cleanIsbn.length === 10 ? convertIsbn10to13(cleanIsbn) : cleanIsbn;
       
-      const response = await fetch(`https://api.openbd.jp/v1/get?isbn=${isbn13}`);
-      const data = await response.json();
-      
-      let title = '';
-      let author = '';
-      let publisher = '';
-      let pubdate = '';
+      let result = null;
+      let cover = '';
 
-      if (data && data[0]) {
-        const bookData = data[0].summary;
-        title = bookData.title || '';
-        author = bookData.author || '';
-        publisher = bookData.publisher || '';
-        pubdate = bookData.pubdate || '';
+      // 1. 楽天ブックスAPIで検索（画像取得率が高い）
+      const rakutenResult = await searchRakuten(isbn13);
+      if (rakutenResult) {
+        result = rakutenResult;
+        cover = rakutenResult.cover;
       }
 
-      const cover = `https://ndlsearch.ndl.go.jp/thumbnail/${isbn13}.jpg`;
-
-      if (title) {
-        setSearchResult({ isbn: isbn13, title, author, publisher, cover, pubdate });
-      } else {
-        const googleResponse = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn13}`);
-        const googleData = await googleResponse.json();
-        
-        if (googleData.items && googleData.items[0]) {
-          const volumeInfo = googleData.items[0].volumeInfo;
-          setSearchResult({
-            isbn: isbn13,
-            title: volumeInfo.title || '',
-            author: volumeInfo.authors?.join(', ') || '',
-            publisher: volumeInfo.publisher || '',
-            cover: cover,
-            pubdate: volumeInfo.publishedDate || ''
-          });
-        } else {
-          alert('本が見つかりませんでした。手動で入力してください。');
-          setSearchResult({ isbn: isbn13, title: '', author: '', publisher: '', cover: cover, pubdate: '' });
+      // 2. OpenBDで検索（楽天で見つからない場合、または情報補完）
+      if (!result || !result.title) {
+        const openBDResult = await searchOpenBD(isbn13);
+        if (openBDResult && openBDResult.title) {
+          result = result || openBDResult;
+          if (!result.title) result.title = openBDResult.title;
+          if (!result.author) result.author = openBDResult.author;
+          if (!result.publisher) result.publisher = openBDResult.publisher;
         }
+      }
+
+      // 3. 画像がなければ国会図書館を試す
+      if (!cover) {
+        cover = `https://ndlsearch.ndl.go.jp/thumbnail/${isbn13}.jpg`;
+      }
+
+      // 4. Google Booksで検索（まだ見つからない場合）
+      if (!result || !result.title) {
+        const googleResult = await searchGoogleBooks(isbn13);
+        if (googleResult && googleResult.title) {
+          result = googleResult;
+          if (!cover && googleResult.cover) {
+            cover = googleResult.cover;
+          }
+        }
+      }
+
+      if (result && result.title) {
+        setSearchResult({
+          isbn: isbn13,
+          title: result.title,
+          author: result.author || '',
+          publisher: result.publisher || '',
+          cover: cover,
+          pubdate: result.pubdate || ''
+        });
+      } else {
+        alert('本が見つかりませんでした。手動で入力してください。');
+        setSearchResult({
+          isbn: isbn13,
+          title: '',
+          author: '',
+          publisher: '',
+          cover: `https://ndlsearch.ndl.go.jp/thumbnail/${isbn13}.jpg`,
+          pubdate: ''
+        });
       }
     } catch (error) {
       console.error('検索エラー:', error);
