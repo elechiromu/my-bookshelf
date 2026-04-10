@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, LabelList } from 'recharts';
-import { Book, Plus, Search, Star, X, ChevronLeft, ChevronRight, BookOpen, Library, BarChart3, Edit3, Trash2, LogIn, LogOut, User, Loader } from 'lucide-react';
+import { Book, Plus, Search, Star, X, ChevronLeft, ChevronRight, BookOpen, Library, BarChart3, Edit3, Trash2, LogOut, User, Loader, RefreshCw } from 'lucide-react';
 
 // Firebase imports
 import { initializeApp } from 'firebase/app';
@@ -48,6 +48,55 @@ const STATUS_COLORS = {
   [STATUS.WANT_TO_READ]: { bg: '#f59e0b', light: '#fffbeb', text: '#d97706' }
 };
 
+// 楽天ブックスAPIで画像を取得
+const fetchCoverFromRakuten = async (isbn) => {
+  try {
+    const response = await fetch(
+      `https://app.rakuten.co.jp/services/api/BooksBook/Search/20170404?applicationId=${RAKUTEN_APP_ID}&isbn=${isbn}`
+    );
+    const data = await response.json();
+    if (data.Items && data.Items.length > 0) {
+      const book = data.Items[0].Item;
+      return book.largeImageUrl || book.mediumImageUrl || '';
+    }
+    return '';
+  } catch (error) {
+    console.error('楽天API error:', error);
+    return '';
+  }
+};
+
+// Google Books APIで画像を取得
+const fetchCoverFromGoogle = async (isbn) => {
+  try {
+    const response = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`);
+    const data = await response.json();
+    if (data.items && data.items[0]?.volumeInfo?.imageLinks) {
+      const thumbnail = data.items[0].volumeInfo.imageLinks.thumbnail || '';
+      return thumbnail.replace('http://', 'https://').replace('zoom=1', 'zoom=2');
+    }
+    return '';
+  } catch (error) {
+    console.error('Google Books error:', error);
+    return '';
+  }
+};
+
+// OpenBD APIで画像を取得
+const fetchCoverFromOpenBD = async (isbn) => {
+  try {
+    const response = await fetch(`https://api.openbd.jp/v1/get?isbn=${isbn}`);
+    const data = await response.json();
+    if (data && data[0]?.summary?.cover) {
+      return data[0].summary.cover;
+    }
+    return '';
+  } catch (error) {
+    console.error('OpenBD error:', error);
+    return '';
+  }
+};
+
 export default function BookshelfApp() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -71,7 +120,7 @@ export default function BookshelfApp() {
     return () => unsubscribe();
   }, []);
 
-  // Firestoreからデータを取得（リアルタイム同期）
+  // Firestoreからデータを取得
   useEffect(() => {
     if (!user) {
       setBooks([]);
@@ -94,7 +143,6 @@ export default function BookshelfApp() {
     return () => unsubscribe();
   }, [user]);
 
-  // Googleでログイン
   const handleLogin = async () => {
     try {
       await signInWithPopup(auth, googleProvider);
@@ -104,7 +152,6 @@ export default function BookshelfApp() {
     }
   };
 
-  // ログアウト
   const handleLogout = async () => {
     try {
       await signOut(auth);
@@ -113,7 +160,6 @@ export default function BookshelfApp() {
     }
   };
 
-  // ISBN-10をISBN-13に変換
   const convertIsbn10to13 = (isbn10) => {
     if (isbn10.length !== 10) return isbn10;
     const isbn12 = '978' + isbn10.slice(0, 9);
@@ -125,76 +171,7 @@ export default function BookshelfApp() {
     return isbn12 + checkDigit;
   };
 
-  // 楽天ブックスAPIで本を検索
-  const searchRakuten = async (isbn) => {
-    try {
-      const response = await fetch(
-        `https://app.rakuten.co.jp/services/api/BooksBook/Search/20170404?applicationId=${RAKUTEN_APP_ID}&isbn=${isbn}&format=json`
-      );
-      const data = await response.json();
-      if (data.Items && data.Items.length > 0) {
-        const book = data.Items[0].Item;
-        return {
-          title: book.title || '',
-          author: book.author || '',
-          publisher: book.publisherName || '',
-          cover: book.largeImageUrl || book.mediumImageUrl || book.smallImageUrl || '',
-          pubdate: book.salesDate || ''
-        };
-      }
-      return null;
-    } catch (error) {
-      console.error('楽天API error:', error);
-      return null;
-    }
-  };
-
-  // OpenBD APIで本を検索
-  const searchOpenBD = async (isbn) => {
-    try {
-      const response = await fetch(`https://api.openbd.jp/v1/get?isbn=${isbn}`);
-      const data = await response.json();
-      if (data && data[0]) {
-        const bookData = data[0].summary;
-        return {
-          title: bookData.title || '',
-          author: bookData.author || '',
-          publisher: bookData.publisher || '',
-          cover: bookData.cover || '',
-          pubdate: bookData.pubdate || ''
-        };
-      }
-      return null;
-    } catch (error) {
-      console.error('OpenBD error:', error);
-      return null;
-    }
-  };
-
-  // Google Books APIで本を検索
-  const searchGoogleBooks = async (isbn) => {
-    try {
-      const response = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`);
-      const data = await response.json();
-      if (data.items && data.items[0]) {
-        const volumeInfo = data.items[0].volumeInfo;
-        const thumbnail = volumeInfo.imageLinks?.thumbnail || '';
-        return {
-          title: volumeInfo.title || '',
-          author: volumeInfo.authors?.join(', ') || '',
-          publisher: volumeInfo.publisher || '',
-          cover: thumbnail.replace('http://', 'https://'),
-          pubdate: volumeInfo.publishedDate || ''
-        };
-      }
-      return null;
-    } catch (error) {
-      console.error('Google Books error:', error);
-      return null;
-    }
-  };
-
-  // 本を検索（複数API）
+  // 本を検索
   const searchBook = async (isbnCode) => {
     const cleanIsbn = isbnCode.replace(/[-\s]/g, '');
     if (!/^\d{10}$|^\d{13}$/.test(cleanIsbn)) {
@@ -206,62 +183,73 @@ export default function BookshelfApp() {
     try {
       const isbn13 = cleanIsbn.length === 10 ? convertIsbn10to13(cleanIsbn) : cleanIsbn;
       
-      let result = null;
+      let title = '';
+      let author = '';
+      let publisher = '';
       let cover = '';
+      let pubdate = '';
 
-      // 1. 楽天ブックスAPIで検索（画像取得率が高い）
-      const rakutenResult = await searchRakuten(isbn13);
-      if (rakutenResult) {
-        result = rakutenResult;
-        cover = rakutenResult.cover;
-      }
-
-      // 2. OpenBDで検索（楽天で見つからない場合、または情報補完）
-      if (!result || !result.title) {
-        const openBDResult = await searchOpenBD(isbn13);
-        if (openBDResult && openBDResult.title) {
-          result = result || openBDResult;
-          if (!result.title) result.title = openBDResult.title;
-          if (!result.author) result.author = openBDResult.author;
-          if (!result.publisher) result.publisher = openBDResult.publisher;
+      // 楽天ブックスAPIで検索
+      try {
+        const response = await fetch(
+          `https://app.rakuten.co.jp/services/api/BooksBook/Search/20170404?applicationId=${RAKUTEN_APP_ID}&isbn=${isbn13}`
+        );
+        const data = await response.json();
+        if (data.Items && data.Items.length > 0) {
+          const book = data.Items[0].Item;
+          title = book.title || '';
+          author = book.author || '';
+          publisher = book.publisherName || '';
+          cover = book.largeImageUrl || book.mediumImageUrl || '';
+          pubdate = book.salesDate || '';
         }
+      } catch (e) {
+        console.log('楽天API error:', e);
       }
 
-      // 3. 画像がなければ国会図書館を試す
-      if (!cover) {
-        cover = `https://ndlsearch.ndl.go.jp/thumbnail/${isbn13}.jpg`;
-      }
-
-      // 4. Google Booksで検索（まだ見つからない場合）
-      if (!result || !result.title) {
-        const googleResult = await searchGoogleBooks(isbn13);
-        if (googleResult && googleResult.title) {
-          result = googleResult;
-          if (!cover && googleResult.cover) {
-            cover = googleResult.cover;
+      // OpenBDで補完
+      if (!title) {
+        try {
+          const response = await fetch(`https://api.openbd.jp/v1/get?isbn=${isbn13}`);
+          const data = await response.json();
+          if (data && data[0]) {
+            const bookData = data[0].summary;
+            title = bookData.title || title;
+            author = bookData.author || author;
+            publisher = bookData.publisher || publisher;
+            if (!cover && bookData.cover) cover = bookData.cover;
+            pubdate = bookData.pubdate || pubdate;
           }
+        } catch (e) {
+          console.log('OpenBD error:', e);
         }
       }
 
-      if (result && result.title) {
-        setSearchResult({
-          isbn: isbn13,
-          title: result.title,
-          author: result.author || '',
-          publisher: result.publisher || '',
-          cover: cover,
-          pubdate: result.pubdate || ''
-        });
+      // Google Booksで補完
+      if (!title) {
+        try {
+          const response = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn13}`);
+          const data = await response.json();
+          if (data.items && data.items[0]) {
+            const volumeInfo = data.items[0].volumeInfo;
+            title = volumeInfo.title || title;
+            author = volumeInfo.authors?.join(', ') || author;
+            publisher = volumeInfo.publisher || publisher;
+            if (!cover && volumeInfo.imageLinks?.thumbnail) {
+              cover = volumeInfo.imageLinks.thumbnail.replace('http://', 'https://');
+            }
+            pubdate = volumeInfo.publishedDate || pubdate;
+          }
+        } catch (e) {
+          console.log('Google Books error:', e);
+        }
+      }
+
+      if (title) {
+        setSearchResult({ isbn: isbn13, title, author, publisher, cover, pubdate });
       } else {
         alert('本が見つかりませんでした。手動で入力してください。');
-        setSearchResult({
-          isbn: isbn13,
-          title: '',
-          author: '',
-          publisher: '',
-          cover: `https://ndlsearch.ndl.go.jp/thumbnail/${isbn13}.jpg`,
-          pubdate: ''
-        });
+        setSearchResult({ isbn: isbn13, title: '', author: '', publisher: '', cover: '', pubdate: '' });
       }
     } catch (error) {
       console.error('検索エラー:', error);
@@ -270,7 +258,6 @@ export default function BookshelfApp() {
     setIsSearching(false);
   };
 
-  // 本を追加
   const addBook = async (bookData) => {
     if (!user) return;
     
@@ -296,7 +283,6 @@ export default function BookshelfApp() {
     }
   };
 
-  // 本を更新
   const updateBook = async (updatedBook) => {
     if (!user) return;
     
@@ -312,7 +298,6 @@ export default function BookshelfApp() {
     }
   };
 
-  // 本を削除
   const deleteBook = async (id) => {
     if (!user) return;
     
@@ -328,7 +313,43 @@ export default function BookshelfApp() {
     }
   };
 
-  // 統計データ
+  // 画像のみ更新（モーダルを閉じない）
+  const updateBookCover = async (bookId, newCover) => {
+    if (!user) return;
+    
+    try {
+      const bookToUpdate = books.find(b => b.id === bookId);
+      if (bookToUpdate) {
+        const { id, ...bookData } = bookToUpdate;
+        await setDoc(doc(db, 'users', user.uid, 'books', id), { ...bookData, cover: newCover });
+      }
+    } catch (error) {
+      console.error('画像更新エラー:', error);
+      throw error;
+    }
+  };
+
+  // 画像を再取得
+  const refetchCover = async (book) => {
+    if (!user || !book.isbn) {
+      alert('ISBNがないため画像を取得できません');
+      return null;
+    }
+
+    // 楽天 → OpenBD → Google の順で試す
+    let newCover = await fetchCoverFromRakuten(book.isbn);
+    
+    if (!newCover) {
+      newCover = await fetchCoverFromOpenBD(book.isbn);
+    }
+    
+    if (!newCover) {
+      newCover = await fetchCoverFromGoogle(book.isbn);
+    }
+
+    return newCover;
+  };
+
   const getMonthlyStats = (year) => {
     const months = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
     return months.map((month, index) => ({
@@ -582,7 +603,18 @@ export default function BookshelfApp() {
       </main>
 
       {/* 本詳細モーダル */}
-      {isModalOpen && selectedBook && <BookDetailModal book={selectedBook} isEditMode={isEditMode} onClose={() => { setIsModalOpen(false); setSelectedBook(null); setIsEditMode(false); }} onEdit={() => setIsEditMode(true)} onSave={updateBook} onDelete={deleteBook} />}
+      {isModalOpen && selectedBook && (
+        <BookDetailModal 
+          book={selectedBook} 
+          isEditMode={isEditMode} 
+          onClose={() => { setIsModalOpen(false); setSelectedBook(null); setIsEditMode(false); }} 
+          onEdit={() => setIsEditMode(true)} 
+          onSave={updateBook} 
+          onDelete={deleteBook}
+          onRefetchCover={refetchCover}
+          onUpdateCover={updateBookCover}
+        />
+      )}
     </div>
   );
 }
@@ -623,14 +655,33 @@ function SearchResultCard({ result, onAdd, onCancel }) {
 }
 
 // 本詳細モーダル
-function BookDetailModal({ book, isEditMode, onClose, onEdit, onSave, onDelete }) {
+function BookDetailModal({ book, isEditMode, onClose, onEdit, onSave, onDelete, onRefetchCover, onUpdateCover }) {
   const [editedBook, setEditedBook] = useState(book);
+  const [isRefetching, setIsRefetching] = useState(false);
 
   const handleStatusChange = (status) => {
     const updated = { ...editedBook, status };
     if (status === STATUS.READING && !editedBook.startDate) updated.startDate = new Date().toISOString().split('T')[0];
     if (status === STATUS.COMPLETED && !editedBook.endDate) updated.endDate = new Date().toISOString().split('T')[0];
     setEditedBook(updated);
+  };
+
+  // 画像を再取得
+  const handleRefetchCover = async () => {
+    setIsRefetching(true);
+    try {
+      const newCover = await onRefetchCover(editedBook);
+      if (newCover) {
+        setEditedBook({ ...editedBook, cover: newCover });
+        await onUpdateCover(editedBook.id, newCover);
+        alert('画像を更新しました！');
+      } else {
+        alert('画像が見つかりませんでした');
+      }
+    } catch (error) {
+      alert('画像の更新に失敗しました');
+    }
+    setIsRefetching(false);
   };
 
   return (
@@ -641,6 +692,27 @@ function BookDetailModal({ book, isEditMode, onClose, onEdit, onSave, onDelete }
           <div style={{ width: '120px', aspectRatio: '2/3', borderRadius: '4px', overflow: 'hidden', boxShadow: '0 8px 25px rgba(0,0,0,0.3)', background: 'white' }}>
             {editedBook.cover ? <img src={editedBook.cover} referrerPolicy="no-referrer" alt={editedBook.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', padding: '12px', textAlign: 'center', fontSize: '11px' }}>{editedBook.title}</div>}
           </div>
+          {/* 画像再取得ボタン */}
+          <button
+            onClick={handleRefetchCover}
+            disabled={isRefetching}
+            style={{
+              marginTop: '12px',
+              padding: '8px 16px',
+              background: 'rgba(255,255,255,0.2)',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: isRefetching ? 'wait' : 'pointer',
+              fontSize: '12px',
+              color: 'white',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            <RefreshCw size={14} style={isRefetching ? { animation: 'spin 1s linear infinite' } : {}} />
+            {isRefetching ? '取得中...' : '画像を再取得'}
+          </button>
         </div>
         <div style={{ padding: '24px' }}>
           {isEditMode ? (
@@ -704,6 +776,7 @@ function BookDetailModal({ book, isEditMode, onClose, onEdit, onSave, onDelete }
             )}
           </div>
         </div>
+        <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
       </div>
     </div>
   );
