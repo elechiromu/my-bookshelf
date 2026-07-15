@@ -237,32 +237,45 @@ export default function BookshelfApp() {
   };
 
   // バーコードスキャン開始
-  const startScanner = async () => {
+  const startScanner = () => {
     setIsScanning(true);
-    try {
-      const html5QrCode = new Html5Qrcode("reader");
-      scannerRef.current = html5QrCode;
-      
-      await html5QrCode.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 250, height: 150 } },
-        (decodedText) => {
-          // ISBNバーコード検出
-          const cleanCode = decodedText.replace(/[^0-9X]/gi, '');
-          if (/^(978|979)?\d{9}[\dX]$/i.test(cleanCode)) {
-            stopScanner();
-            setIsbn(cleanCode);
-            searchBook(cleanCode);
-          }
-        },
-        () => {}
-      );
-    } catch (err) {
-      console.error('Scanner error:', err);
-      setIsScanning(false);
-      alert('カメラを起動できませんでした');
-    }
   };
+
+  // isScanning が true になったらカメラ起動
+  useEffect(() => {
+    if (!isScanning) return;
+
+    const initScanner = async () => {
+      // DOM更新を待つ
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      try {
+        const html5QrCode = new Html5Qrcode("reader");
+        scannerRef.current = html5QrCode;
+        
+        await html5QrCode.start(
+          { facingMode: "environment" },
+          { fps: 10, qrbox: { width: 250, height: 150 } },
+          (decodedText) => {
+            // ISBNバーコード検出
+            const cleanCode = decodedText.replace(/[^0-9X]/gi, '');
+            if (/^(978|979)?\d{9}[\dX]$/i.test(cleanCode)) {
+              stopScanner();
+              setIsbn(cleanCode);
+              searchBook(cleanCode);
+            }
+          },
+          () => {}
+        );
+      } catch (err) {
+        console.error('Scanner error:', err);
+        setIsScanning(false);
+        alert('カメラを起動できませんでした');
+      }
+    };
+
+    initScanner();
+  }, [isScanning]);
 
   // バーコードスキャン停止
   const stopScanner = async () => {
