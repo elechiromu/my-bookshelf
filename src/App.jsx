@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, LabelList } from 'recharts';
-import { Book, Plus, Search, Star, X, ChevronLeft, ChevronRight, BookOpen, Library, BarChart3, Edit3, Trash2, LogIn, LogOut, User, Loader } from 'lucide-react';
+import { Book, Plus, Search, Star, X, ChevronLeft, ChevronRight, BookOpen, Library, BarChart3, Edit3, Trash2, LogOut, Loader } from 'lucide-react';
 
 // Firebase imports
 import { initializeApp } from 'firebase/app';
@@ -16,6 +16,9 @@ const firebaseConfig = {
   messagingSenderId: "373826584634",
   appId: "1:373826584634:web:16c5961e24de9dcdc03503"
 };
+
+// 楽天API設定
+const RAKUTEN_APP_ID = "1009573082361123761";
 
 // Firebase初期化
 const app = initializeApp(firebaseConfig);
@@ -45,6 +48,70 @@ const STATUS_COLORS = {
   [STATUS.WANT_TO_READ]: { bg: '#f59e0b', light: '#fffbeb', text: '#d97706' }
 };
 
+// 画像コンポーネント（エラー時にフォールバック）
+function BookCover({ src, title, style = {} }) {
+  const [hasError, setHasError] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // srcが変更されたらリセット
+  useEffect(() => {
+    setHasError(false);
+    setIsLoading(true);
+  }, [src]);
+
+  if (!src || hasError) {
+    return (
+      <div style={{ 
+        width: '100%', 
+        height: '100%', 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'center', 
+        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+        padding: '8px',
+        textAlign: 'center',
+        ...style 
+      }}>
+        <span style={{ color: 'white', fontSize: '10px', fontWeight: '500', lineHeight: '1.3' }}>{title}</span>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {isLoading && (
+        <div style={{ 
+          position: 'absolute',
+          inset: 0,
+          display: 'flex', 
+          alignItems: 'center', 
+          justifyContent: 'center', 
+          background: '#f3f4f6'
+        }}>
+          <Loader size={16} style={{ animation: 'spin 1s linear infinite', color: '#9ca3af' }} />
+        </div>
+      )}
+      <img 
+        src={src} 
+        alt={title} 
+        referrerPolicy="no-referrer"
+        onLoad={() => setIsLoading(false)}
+        onError={() => {
+          setHasError(true);
+          setIsLoading(false);
+        }}
+        style={{ 
+          width: '100%', 
+          height: '100%', 
+          objectFit: 'cover',
+          opacity: isLoading ? 0 : 1,
+          transition: 'opacity 0.2s'
+        }} 
+      />
+    </>
+  );
+}
+
 export default function BookshelfApp() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -59,7 +126,6 @@ export default function BookshelfApp() {
   const [statsYear, setStatsYear] = useState(new Date().getFullYear());
   const [filterStatus, setFilterStatus] = useState('all');
 
-  // 認証状態の監視
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
@@ -68,7 +134,6 @@ export default function BookshelfApp() {
     return () => unsubscribe();
   }, []);
 
-  // Firestoreからデータを取得（リアルタイム同期）
   useEffect(() => {
     if (!user) {
       setBooks([]);
@@ -91,7 +156,6 @@ export default function BookshelfApp() {
     return () => unsubscribe();
   }, [user]);
 
-  // Googleでログイン
   const handleLogin = async () => {
     try {
       await signInWithPopup(auth, googleProvider);
@@ -101,7 +165,6 @@ export default function BookshelfApp() {
     }
   };
 
-  // ログアウト
   const handleLogout = async () => {
     try {
       await signOut(auth);
@@ -110,7 +173,6 @@ export default function BookshelfApp() {
     }
   };
 
-  // ISBN-10をISBN-13に変換
   const convertIsbn10to13 = (isbn10) => {
     if (isbn10.length !== 10) return isbn10;
     const isbn12 = '978' + isbn10.slice(0, 9);
@@ -122,7 +184,7 @@ export default function BookshelfApp() {
     return isbn12 + checkDigit;
   };
 
-  // 本を検索
+  // 本を検索（楽天優先）
   const searchBook = async (isbnCode) => {
     const cleanIsbn = isbnCode.replace(/[-\s]/g, '');
     if (!/^\d{10}$|^\d{13}$/.test(cleanIsbn)) {
@@ -134,44 +196,75 @@ export default function BookshelfApp() {
     try {
       const isbn13 = cleanIsbn.length === 10 ? convertIsbn10to13(cleanIsbn) : cleanIsbn;
       
-      const response = await fetch(`https://api.openbd.jp/v1/get?isbn=${isbn13}`);
-      const data = await response.json();
-      
       let title = '';
       let author = '';
       let publisher = '';
+      let cover = '';
       let pubdate = '';
 
-      if (data && data[0]) {
-        const bookData = data[0].summary;
-        title = bookData.title || '';
-        author = bookData.author || '';
-        publisher = bookData.publisher || '';
-        pubdate = bookData.pubdate || '';
+      // 1. 楽天ブックスAPIで検索
+      try {
+        const response = await fetch(
+          `https://app.rakuten.co.jp/services/api/BooksBook/Search/20170404?applicationId=${RAKUTEN_APP_ID}&isbn=${isbn13}`
+        );
+        if (response.ok) {
+          const data = await response.json();
+          if (data.Items && data.Items.length > 0) {
+            const book = data.Items[0].Item;
+            title = book.title || '';
+            author = book.author || '';
+            publisher = book.publisherName || '';
+            cover = book.largeImageUrl || book.mediumImageUrl || '';
+            pubdate = book.salesDate || '';
+          }
+        }
+      } catch (e) {
+        console.log('楽天API error:', e);
       }
 
-      const cover = `https://ndlsearch.ndl.go.jp/thumbnail/${isbn13}.jpg`;
+      // 2. OpenBDで補完
+      if (!title) {
+        try {
+          const response = await fetch(`https://api.openbd.jp/v1/get?isbn=${isbn13}`);
+          const data = await response.json();
+          if (data && data[0]) {
+            const bookData = data[0].summary;
+            title = bookData.title || title;
+            author = bookData.author || author;
+            publisher = bookData.publisher || publisher;
+            if (!cover && bookData.cover) cover = bookData.cover;
+            pubdate = bookData.pubdate || pubdate;
+          }
+        } catch (e) {
+          console.log('OpenBD error:', e);
+        }
+      }
+
+      // 3. Google Booksで補完
+      if (!title) {
+        try {
+          const response = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn13}`);
+          const data = await response.json();
+          if (data.items && data.items[0]) {
+            const volumeInfo = data.items[0].volumeInfo;
+            title = volumeInfo.title || title;
+            author = volumeInfo.authors?.join(', ') || author;
+            publisher = volumeInfo.publisher || publisher;
+            if (!cover && volumeInfo.imageLinks?.thumbnail) {
+              cover = volumeInfo.imageLinks.thumbnail.replace('http://', 'https://');
+            }
+            pubdate = volumeInfo.publishedDate || pubdate;
+          }
+        } catch (e) {
+          console.log('Google Books error:', e);
+        }
+      }
 
       if (title) {
         setSearchResult({ isbn: isbn13, title, author, publisher, cover, pubdate });
       } else {
-        const googleResponse = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn13}`);
-        const googleData = await googleResponse.json();
-        
-        if (googleData.items && googleData.items[0]) {
-          const volumeInfo = googleData.items[0].volumeInfo;
-          setSearchResult({
-            isbn: isbn13,
-            title: volumeInfo.title || '',
-            author: volumeInfo.authors?.join(', ') || '',
-            publisher: volumeInfo.publisher || '',
-            cover: cover,
-            pubdate: volumeInfo.publishedDate || ''
-          });
-        } else {
-          alert('本が見つかりませんでした。手動で入力してください。');
-          setSearchResult({ isbn: isbn13, title: '', author: '', publisher: '', cover: cover, pubdate: '' });
-        }
+        alert('本が見つかりませんでした。手動で入力してください。');
+        setSearchResult({ isbn: isbn13, title: '', author: '', publisher: '', cover: '', pubdate: '' });
       }
     } catch (error) {
       console.error('検索エラー:', error);
@@ -180,7 +273,6 @@ export default function BookshelfApp() {
     setIsSearching(false);
   };
 
-  // 本を追加
   const addBook = async (bookData) => {
     if (!user) return;
     
@@ -206,7 +298,6 @@ export default function BookshelfApp() {
     }
   };
 
-  // 本を更新
   const updateBook = async (updatedBook) => {
     if (!user) return;
     
@@ -222,7 +313,6 @@ export default function BookshelfApp() {
     }
   };
 
-  // 本を削除
   const deleteBook = async (id) => {
     if (!user) return;
     
@@ -238,7 +328,6 @@ export default function BookshelfApp() {
     }
   };
 
-  // 統計データ
   const getMonthlyStats = (year) => {
     const months = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
     return months.map((month, index) => ({
@@ -335,8 +424,8 @@ export default function BookshelfApp() {
                 <div style={{ display: 'flex', gap: '16px', overflowX: 'auto', paddingBottom: '8px' }}>
                   {books.filter(b => b.status === STATUS.READING).map(book => (
                     <div key={book.id} onClick={() => { setSelectedBook(book); setIsModalOpen(true); }} style={{ flexShrink: 0, width: '100px', cursor: 'pointer' }}>
-                      <div style={{ aspectRatio: '2/3', borderRadius: '6px', overflow: 'hidden', boxShadow: '0 4px 15px rgba(59, 130, 246, 0.3)', background: book.cover ? 'white' : 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)' }}>
-                        {book.cover ? <img src={book.cover} alt={book.title} referrerPolicy="no-referrer" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px', textAlign: 'center' }}><span style={{ color: 'white', fontSize: '10px', fontWeight: '500' }}>{book.title}</span></div>}
+                      <div style={{ aspectRatio: '2/3', borderRadius: '6px', overflow: 'hidden', boxShadow: '0 4px 15px rgba(59, 130, 246, 0.3)', position: 'relative' }}>
+                        <BookCover src={book.cover} title={book.title} />
                       </div>
                       <p style={{ fontSize: '11px', fontWeight: '600', color: '#1e40af', marginTop: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{book.title}</p>
                     </div>
@@ -356,8 +445,8 @@ export default function BookshelfApp() {
                 <div style={{ display: 'flex', gap: '16px', overflowX: 'auto', paddingBottom: '8px' }}>
                   {books.filter(b => b.status === STATUS.TSUNDOKU).map(book => (
                     <div key={book.id} onClick={() => { setSelectedBook(book); setIsModalOpen(true); }} style={{ flexShrink: 0, width: '100px', cursor: 'pointer' }}>
-                      <div style={{ aspectRatio: '2/3', borderRadius: '6px', overflow: 'hidden', boxShadow: '0 4px 15px rgba(139, 92, 246, 0.3)', background: book.cover ? 'white' : 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)' }}>
-                        {book.cover ? <img src={book.cover} alt={book.title} referrerPolicy="no-referrer" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px', textAlign: 'center' }}><span style={{ color: 'white', fontSize: '10px', fontWeight: '500' }}>{book.title}</span></div>}
+                      <div style={{ aspectRatio: '2/3', borderRadius: '6px', overflow: 'hidden', boxShadow: '0 4px 15px rgba(139, 92, 246, 0.3)', position: 'relative' }}>
+                        <BookCover src={book.cover} title={book.title} />
                       </div>
                       <p style={{ fontSize: '11px', fontWeight: '600', color: '#5b21b6', marginTop: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{book.title}</p>
                     </div>
@@ -384,8 +473,8 @@ export default function BookshelfApp() {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '20px' }}>
                 {filteredBooks.map(book => (
                   <div key={book.id} onClick={() => { setSelectedBook(book); setIsModalOpen(true); }} style={{ cursor: 'pointer' }}>
-                    <div style={{ aspectRatio: '2/3', borderRadius: '4px', overflow: 'hidden', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', background: book.cover ? 'white' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', position: 'relative' }}>
-                      {book.cover ? <img src={book.cover} alt={book.title} referrerPolicy="no-referrer" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '12px', textAlign: 'center' }}><span style={{ color: 'white', fontSize: '12px', fontWeight: '500', lineHeight: '1.4' }}>{book.title}</span></div>}
+                    <div style={{ aspectRatio: '2/3', borderRadius: '4px', overflow: 'hidden', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', position: 'relative' }}>
+                      <BookCover src={book.cover} title={book.title} />
                       <div style={{ position: 'absolute', top: '8px', right: '8px', padding: '4px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: '600', background: STATUS_COLORS[book.status]?.bg || '#6b7280', color: 'white' }}>{STATUS_LABELS[book.status]}</div>
                     </div>
                     <div style={{ marginTop: '10px' }}>
@@ -454,8 +543,8 @@ export default function BookshelfApp() {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                       {booksByMonth[month].sort((a, b) => new Date(b.endDate) - new Date(a.endDate)).map(book => (
                         <div key={book.id} onClick={() => { setSelectedBook(book); setIsModalOpen(true); }} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px', background: '#f8fafc', borderRadius: '8px', cursor: 'pointer' }}>
-                          <div style={{ width: '40px', height: '60px', borderRadius: '4px', overflow: 'hidden', flexShrink: 0, background: book.cover ? '#fff' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
-                            {book.cover ? <img src={book.cover} referrerPolicy="no-referrer" alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Book size={16} color="white" /></div>}
+                          <div style={{ width: '40px', height: '60px', borderRadius: '4px', overflow: 'hidden', flexShrink: 0, position: 'relative' }}>
+                            <BookCover src={book.cover} title={book.title} />
                           </div>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <p style={{ fontSize: '14px', fontWeight: '600', color: '#1f2937', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{book.title}</p>
@@ -493,6 +582,8 @@ export default function BookshelfApp() {
 
       {/* 本詳細モーダル */}
       {isModalOpen && selectedBook && <BookDetailModal book={selectedBook} isEditMode={isEditMode} onClose={() => { setIsModalOpen(false); setSelectedBook(null); setIsEditMode(false); }} onEdit={() => setIsEditMode(true)} onSave={updateBook} onDelete={deleteBook} />}
+      
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
@@ -505,8 +596,8 @@ function SearchResultCard({ result, onAdd, onCancel }) {
       <h3 style={{ fontSize: '14px', fontWeight: '600', color: '#4b5563', marginBottom: '16px' }}>検索結果</h3>
       <div style={{ display: 'flex', gap: '20px' }}>
         <div style={{ width: '100px', flexShrink: 0 }}>
-          <div style={{ aspectRatio: '2/3', borderRadius: '4px', overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.1)', background: editedResult.cover ? 'white' : '#e5e7eb' }}>
-            {editedResult.cover ? <img src={editedResult.cover} referrerPolicy="no-referrer" alt="表紙" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af' }}><Book size={32} /></div>}
+          <div style={{ aspectRatio: '2/3', borderRadius: '4px', overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.1)', position: 'relative' }}>
+            <BookCover src={editedResult.cover} title={editedResult.title || 'No Title'} />
           </div>
         </div>
         <div style={{ flex: 1 }}>
@@ -548,8 +639,8 @@ function BookDetailModal({ book, isEditMode, onClose, onEdit, onSave, onDelete }
       <div style={{ background: 'white', borderRadius: '16px', maxWidth: '500px', width: '100%', maxHeight: '90vh', overflow: 'auto', position: 'relative' }}>
         <button onClick={onClose} style={{ position: 'absolute', top: '16px', right: '16px', background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', zIndex: 10 }}><X size={24} /></button>
         <div style={{ background: 'linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%)', padding: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <div style={{ width: '120px', aspectRatio: '2/3', borderRadius: '4px', overflow: 'hidden', boxShadow: '0 8px 25px rgba(0,0,0,0.3)', background: 'white' }}>
-            {editedBook.cover ? <img src={editedBook.cover} referrerPolicy="no-referrer" alt={editedBook.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', padding: '12px', textAlign: 'center', fontSize: '11px' }}>{editedBook.title}</div>}
+          <div style={{ width: '120px', aspectRatio: '2/3', borderRadius: '4px', overflow: 'hidden', boxShadow: '0 8px 25px rgba(0,0,0,0.3)', position: 'relative' }}>
+            <BookCover src={editedBook.cover} title={editedBook.title} />
           </div>
         </div>
         <div style={{ padding: '24px' }}>
