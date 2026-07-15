@@ -7,6 +7,7 @@ import { Html5Qrcode } from 'html5-qrcode';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 // Firebase設定
 const firebaseConfig = {
@@ -25,6 +26,7 @@ const RAKUTEN_APP_ID = "1009573082361123761";
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+const storage = getStorage(app);
 const googleProvider = new GoogleAuthProvider();
 
 // 本のステータス
@@ -441,6 +443,20 @@ export default function BookshelfApp() {
     return newCover;
   };
 
+  // 画像をアップロード
+  const uploadCover = async (bookId, file) => {
+    if (!user) return null;
+    
+    const storageRef = ref(storage, `covers/${user.uid}/${bookId}_${Date.now()}`);
+    await uploadBytes(storageRef, file);
+    const downloadURL = await getDownloadURL(storageRef);
+    
+    // Firestoreも更新
+    await updateBookCover(bookId, downloadURL);
+    
+    return downloadURL;
+  };
+
   const getMonthlyStats = (year) => {
     const months = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
     return months.map((month, index) => ({
@@ -722,6 +738,7 @@ export default function BookshelfApp() {
           onDelete={deleteBook}
           onRefetchCover={refetchCover}
           onUpdateCover={updateBookCover}
+          onUploadCover={uploadCover}
         />
       )}
       
@@ -766,9 +783,11 @@ function SearchResultCard({ result, onAdd, onCancel }) {
 }
 
 // 本詳細モーダル
-function BookDetailModal({ book, isEditMode, onClose, onEdit, onSave, onDelete, onRefetchCover, onUpdateCover }) {
+function BookDetailModal({ book, isEditMode, onClose, onEdit, onSave, onDelete, onRefetchCover, onUpdateCover, onUploadCover }) {
   const [editedBook, setEditedBook] = useState(book);
   const [isRefetching, setIsRefetching] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef(null);
 
   const handleStatusChange = (status) => {
     const updated = { ...editedBook, status };
@@ -798,6 +817,30 @@ function BookDetailModal({ book, isEditMode, onClose, onEdit, onSave, onDelete, 
     setIsRefetching(false);
   };
 
+  const handleFileSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    if (!file.type.startsWith('image/')) {
+      alert('画像ファイルを選択してください');
+      return;
+    }
+    
+    setIsUploading(true);
+    try {
+      const newCover = await onUploadCover(editedBook.id, file);
+      if (newCover) {
+        setEditedBook({ ...editedBook, cover: newCover });
+        alert('画像をアップロードしました！');
+      }
+    } catch (error) {
+      console.error('Upload error:', error);
+      alert('アップロードに失敗しました');
+    }
+    setIsUploading(false);
+    e.target.value = '';
+  };
+
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 1000 }}>
       <div style={{ background: 'white', borderRadius: '16px', maxWidth: '500px', width: '100%', maxHeight: '90vh', overflow: 'auto', position: 'relative' }}>
@@ -806,27 +849,54 @@ function BookDetailModal({ book, isEditMode, onClose, onEdit, onSave, onDelete, 
           <div style={{ width: '120px', aspectRatio: '2/3', borderRadius: '4px', overflow: 'hidden', boxShadow: '0 8px 25px rgba(0,0,0,0.3)', position: 'relative' }}>
             <BookCover src={editedBook.cover} title={editedBook.title} />
           </div>
-          {/* 画像再取得ボタン */}
-          <button
-            onClick={handleRefetchCover}
-            disabled={isRefetching}
-            style={{
-              marginTop: '12px',
-              padding: '8px 16px',
-              background: 'rgba(255,255,255,0.2)',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: isRefetching ? 'wait' : 'pointer',
-              fontSize: '12px',
-              color: 'white',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}
-          >
-            <RefreshCw size={14} style={isRefetching ? { animation: 'spin 1s linear infinite' } : {}} />
-            {isRefetching ? '取得中...' : '画像を再取得'}
-          </button>
+          {/* 画像操作ボタン */}
+          <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+            <button
+              onClick={handleRefetchCover}
+              disabled={isRefetching || isUploading}
+              style={{
+                padding: '8px 12px',
+                background: 'rgba(255,255,255,0.2)',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: isRefetching ? 'wait' : 'pointer',
+                fontSize: '11px',
+                color: 'white',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}
+            >
+              <RefreshCw size={12} style={isRefetching ? { animation: 'spin 1s linear infinite' } : {}} />
+              {isRefetching ? '取得中...' : '再取得'}
+            </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isUploading || isRefetching}
+              style={{
+                padding: '8px 12px',
+                background: 'rgba(255,255,255,0.2)',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: isUploading ? 'wait' : 'pointer',
+                fontSize: '11px',
+                color: 'white',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}
+            >
+              <Camera size={12} />
+              {isUploading ? 'アップロード中...' : 'アップロード'}
+            </button>
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileSelect}
+              accept="image/*"
+              style={{ display: 'none' }}
+            />
+          </div>
         </div>
         <div style={{ padding: '24px' }}>
           {isEditMode ? (
