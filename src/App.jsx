@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, LabelList } from 'recharts';
-import { Book, Plus, Search, Star, X, ChevronLeft, ChevronRight, BookOpen, Library, BarChart3, Edit3, Trash2, LogOut, Loader } from 'lucide-react';
+import { Book, Plus, Search, Star, X, ChevronLeft, ChevronRight, BookOpen, Library, BarChart3, Edit3, Trash2, LogOut, Loader, RefreshCw, Camera } from 'lucide-react';
+import { Html5Qrcode } from 'html5-qrcode';
 
 // Firebase imports
 import { initializeApp } from 'firebase/app';
@@ -53,7 +54,6 @@ function BookCover({ src, title, style = {} }) {
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
-  // srcが変更されたらリセット
   useEffect(() => {
     setHasError(false);
     setIsLoading(true);
@@ -112,6 +112,54 @@ function BookCover({ src, title, style = {} }) {
   );
 }
 
+// 楽天APIで画像取得
+async function fetchCoverFromRakuten(isbn) {
+  try {
+    const response = await fetch(
+      `https://app.rakuten.co.jp/services/api/BooksBook/Search/20170404?applicationId=${RAKUTEN_APP_ID}&isbn=${isbn}`
+    );
+    if (!response.ok) return '';
+    const data = await response.json();
+    if (data.Items && data.Items.length > 0) {
+      const book = data.Items[0].Item;
+      return book.largeImageUrl || book.mediumImageUrl || '';
+    }
+    return '';
+  } catch (error) {
+    console.error('楽天API error:', error);
+    return '';
+  }
+}
+
+// OpenBD APIで画像取得
+async function fetchCoverFromOpenBD(isbn) {
+  try {
+    const response = await fetch(`https://api.openbd.jp/v1/get?isbn=${isbn}`);
+    const data = await response.json();
+    if (data && data[0]?.summary?.cover) {
+      return data[0].summary.cover;
+    }
+    return '';
+  } catch (error) {
+    return '';
+  }
+}
+
+// Google Books APIで画像取得
+async function fetchCoverFromGoogle(isbn) {
+  try {
+    const response = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`);
+    const data = await response.json();
+    if (data.items && data.items[0]?.volumeInfo?.imageLinks) {
+      const thumbnail = data.items[0].volumeInfo.imageLinks.thumbnail || '';
+      return thumbnail.replace('http://', 'https://').replace('zoom=1', 'zoom=2');
+    }
+    return '';
+  } catch (error) {
+    return '';
+  }
+}
+
 export default function BookshelfApp() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -125,6 +173,8 @@ export default function BookshelfApp() {
   const [isbn, setIsbn] = useState('');
   const [statsYear, setStatsYear] = useState(new Date().getFullYear());
   const [filterStatus, setFilterStatus] = useState('all');
+  const [isScanning, setIsScanning] = useState(false);
+  const scannerRef = useRef(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -184,7 +234,48 @@ export default function BookshelfApp() {
     return isbn12 + checkDigit;
   };
 
-  // 本を検索（楽天優先）
+  // バーコードスキャン開始
+  const startScanner = async () => {
+    setIsScanning(true);
+    try {
+      const html5QrCode = new Html5Qrcode("reader");
+      scannerRef.current = html5QrCode;
+      
+      await html5QrCode.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 250, height: 150 } },
+        (decodedText) => {
+          // ISBNバーコード検出
+          const cleanCode = decodedText.replace(/[^0-9X]/gi, '');
+          if (/^(978|979)?\d{9}[\dX]$/i.test(cleanCode)) {
+            stopScanner();
+            setIsbn(cleanCode);
+            searchBook(cleanCode);
+          }
+        },
+        () => {}
+      );
+    } catch (err) {
+      console.error('Scanner error:', err);
+      setIsScanning(false);
+      alert('カメラを起動できませんでした');
+    }
+  };
+
+  // バーコードスキャン停止
+  const stopScanner = async () => {
+    if (scannerRef.current) {
+      try {
+        await scannerRef.current.stop();
+        scannerRef.current = null;
+      } catch (err) {
+        console.error('Stop scanner error:', err);
+      }
+    }
+    setIsScanning(false);
+  };
+
+  // 本を検索
   const searchBook = async (isbnCode) => {
     const cleanIsbn = isbnCode.replace(/[-\s]/g, '');
     if (!/^\d{10}$|^\d{13}$/.test(cleanIsbn)) {
@@ -313,6 +404,17 @@ export default function BookshelfApp() {
     }
   };
 
+  // 画像のみ更新
+  const updateBookCover = async (bookId, newCover) => {
+    if (!user) return;
+    
+    const bookToUpdate = books.find(b => b.id === bookId);
+    if (bookToUpdate) {
+      const { id, ...bookData } = bookToUpdate;
+      await setDoc(doc(db, 'users', user.uid, 'books', id), { ...bookData, cover: newCover });
+    }
+  };
+
   const deleteBook = async (id) => {
     if (!user) return;
     
@@ -326,6 +428,17 @@ export default function BookshelfApp() {
         alert('削除に失敗しました');
       }
     }
+  };
+
+  // 画像を再取得
+  const refetchCover = async (book) => {
+    if (!book.isbn) return null;
+    
+    let newCover = await fetchCoverFromRakuten(book.isbn);
+    if (!newCover) newCover = await fetchCoverFromOpenBD(book.isbn);
+    if (!newCover) newCover = await fetchCoverFromGoogle(book.isbn);
+    
+    return newCover;
   };
 
   const getMonthlyStats = (year) => {
@@ -566,6 +679,24 @@ export default function BookshelfApp() {
         {currentView === 'add' && (
           <div style={{ background: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.08)' }}>
             <h2 style={{ fontSize: '18px', fontWeight: '600', color: '#1f2937', marginBottom: '20px' }}>本を追加</h2>
+            
+            {/* バーコードスキャナー */}
+            {isScanning ? (
+              <div style={{ marginBottom: '24px' }}>
+                <div id="reader" style={{ width: '100%', maxWidth: '400px', margin: '0 auto' }}></div>
+                <button onClick={stopScanner} style={{ display: 'block', margin: '16px auto 0', padding: '12px 24px', background: '#ef4444', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '14px' }}>
+                  スキャン停止
+                </button>
+              </div>
+            ) : (
+              <button onClick={startScanner} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', width: '100%', padding: '16px', background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', color: 'white', border: 'none', borderRadius: '12px', cursor: 'pointer', fontSize: '16px', fontWeight: '600', marginBottom: '24px' }}>
+                <Camera size={24} />
+                バーコードをスキャン
+              </button>
+            )}
+
+            <div style={{ textAlign: 'center', color: '#9ca3af', marginBottom: '16px' }}>または</div>
+
             <div style={{ marginBottom: '24px' }}>
               <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#4b5563', marginBottom: '8px' }}>ISBN（バーコード下の数字）</label>
               <div style={{ display: 'flex', gap: '8px' }}>
@@ -581,7 +712,18 @@ export default function BookshelfApp() {
       </main>
 
       {/* 本詳細モーダル */}
-      {isModalOpen && selectedBook && <BookDetailModal book={selectedBook} isEditMode={isEditMode} onClose={() => { setIsModalOpen(false); setSelectedBook(null); setIsEditMode(false); }} onEdit={() => setIsEditMode(true)} onSave={updateBook} onDelete={deleteBook} />}
+      {isModalOpen && selectedBook && (
+        <BookDetailModal 
+          book={selectedBook} 
+          isEditMode={isEditMode} 
+          onClose={() => { setIsModalOpen(false); setSelectedBook(null); setIsEditMode(false); }} 
+          onEdit={() => setIsEditMode(true)} 
+          onSave={updateBook} 
+          onDelete={deleteBook}
+          onRefetchCover={refetchCover}
+          onUpdateCover={updateBookCover}
+        />
+      )}
       
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>
@@ -624,14 +766,36 @@ function SearchResultCard({ result, onAdd, onCancel }) {
 }
 
 // 本詳細モーダル
-function BookDetailModal({ book, isEditMode, onClose, onEdit, onSave, onDelete }) {
+function BookDetailModal({ book, isEditMode, onClose, onEdit, onSave, onDelete, onRefetchCover, onUpdateCover }) {
   const [editedBook, setEditedBook] = useState(book);
+  const [isRefetching, setIsRefetching] = useState(false);
 
   const handleStatusChange = (status) => {
     const updated = { ...editedBook, status };
     if (status === STATUS.READING && !editedBook.startDate) updated.startDate = new Date().toISOString().split('T')[0];
     if (status === STATUS.COMPLETED && !editedBook.endDate) updated.endDate = new Date().toISOString().split('T')[0];
     setEditedBook(updated);
+  };
+
+  const handleRefetchCover = async () => {
+    if (!editedBook.isbn) {
+      alert('ISBNがないため画像を取得できません');
+      return;
+    }
+    setIsRefetching(true);
+    try {
+      const newCover = await onRefetchCover(editedBook);
+      if (newCover) {
+        setEditedBook({ ...editedBook, cover: newCover });
+        await onUpdateCover(editedBook.id, newCover);
+        alert('画像を更新しました！');
+      } else {
+        alert('画像が見つかりませんでした');
+      }
+    } catch (error) {
+      alert('画像の更新に失敗しました');
+    }
+    setIsRefetching(false);
   };
 
   return (
@@ -642,6 +806,27 @@ function BookDetailModal({ book, isEditMode, onClose, onEdit, onSave, onDelete }
           <div style={{ width: '120px', aspectRatio: '2/3', borderRadius: '4px', overflow: 'hidden', boxShadow: '0 8px 25px rgba(0,0,0,0.3)', position: 'relative' }}>
             <BookCover src={editedBook.cover} title={editedBook.title} />
           </div>
+          {/* 画像再取得ボタン */}
+          <button
+            onClick={handleRefetchCover}
+            disabled={isRefetching}
+            style={{
+              marginTop: '12px',
+              padding: '8px 16px',
+              background: 'rgba(255,255,255,0.2)',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: isRefetching ? 'wait' : 'pointer',
+              fontSize: '12px',
+              color: 'white',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            <RefreshCw size={14} style={isRefetching ? { animation: 'spin 1s linear infinite' } : {}} />
+            {isRefetching ? '取得中...' : '画像を再取得'}
+          </button>
         </div>
         <div style={{ padding: '24px' }}>
           {isEditMode ? (
