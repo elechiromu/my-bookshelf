@@ -51,14 +51,38 @@ const STATUS_COLORS = {
   [STATUS.WANT_TO_READ]: { bg: '#f59e0b', light: '#fffbeb', text: '#d97706' }
 };
 
+// 壊れた画像URLを検出
+function isBrokenUrl(url) {
+  if (!url) return true;
+  // 国会図書館の古いURL（403エラー）
+  if (url.includes('ndlsearch.ndl.go.jp')) return true;
+  if (url.includes('iss.ndl.go.jp')) return true;
+  return false;
+}
+
 // 画像コンポーネント（エラー時にフォールバック）
 function BookCover({ src, title, style = {} }) {
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    // 壊れたURLは最初からフォールバック
+    if (isBrokenUrl(src)) {
+      setHasError(true);
+      setIsLoading(false);
+      return;
+    }
+    
     setHasError(false);
     setIsLoading(true);
+    
+    // 5秒タイムアウト
+    const timeout = setTimeout(() => {
+      setHasError(true);
+      setIsLoading(false);
+    }, 5000);
+    
+    return () => clearTimeout(timeout);
   }, [src]);
 
   if (!src || hasError) {
@@ -97,7 +121,10 @@ function BookCover({ src, title, style = {} }) {
         src={src} 
         alt={title} 
         referrerPolicy="no-referrer"
-        onLoad={() => setIsLoading(false)}
+        onLoad={() => {
+          setHasError(false);
+          setIsLoading(false);
+        }}
         onError={() => {
           setHasError(true);
           setIsLoading(false);
