@@ -64,6 +64,7 @@ function isBrokenUrl(url) {
 function BookCover({ src, title, style = {} }) {
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const timeoutRef = useRef(null);
 
   useEffect(() => {
     // 壊れたURLは最初からフォールバック
@@ -72,31 +73,55 @@ function BookCover({ src, title, style = {} }) {
       setIsLoading(false);
       return;
     }
-    
+
     setHasError(false);
     setIsLoading(true);
-    
-    // 5秒タイムアウト
-    const timeout = setTimeout(() => {
+
+    // 10秒タイムアウト（読み込めない場合のみ発動）
+    timeoutRef.current = setTimeout(() => {
       setHasError(true);
       setIsLoading(false);
-    }, 5000);
-    
-    return () => clearTimeout(timeout);
+    }, 10000);
+
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
   }, [src]);
+
+  const handleLoad = () => {
+    // タイムアウトをキャンセル
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    setHasError(false);
+    setIsLoading(false);
+  };
+
+  const handleError = () => {
+    // タイムアウトをキャンセル
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    setHasError(true);
+    setIsLoading(false);
+  };
 
   if (!src || hasError) {
     return (
-      <div style={{ 
-        width: '100%', 
-        height: '100%', 
-        display: 'flex', 
-        alignItems: 'center', 
-        justifyContent: 'center', 
+      <div style={{
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
         background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
         padding: '8px',
         textAlign: 'center',
-        ...style 
+        ...style
       }}>
         <span style={{ color: 'white', fontSize: '10px', fontWeight: '500', lineHeight: '1.3' }}>{title}</span>
       </div>
@@ -106,36 +131,30 @@ function BookCover({ src, title, style = {} }) {
   return (
     <>
       {isLoading && (
-        <div style={{ 
+        <div style={{
           position: 'absolute',
           inset: 0,
-          display: 'flex', 
-          alignItems: 'center', 
-          justifyContent: 'center', 
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
           background: '#f3f4f6'
         }}>
           <Loader size={16} style={{ animation: 'spin 1s linear infinite', color: '#9ca3af' }} />
         </div>
       )}
-      <img 
-        src={src} 
-        alt={title} 
+      <img
+        src={src}
+        alt={title}
         referrerPolicy="no-referrer"
-        onLoad={() => {
-          setHasError(false);
-          setIsLoading(false);
-        }}
-        onError={() => {
-          setHasError(true);
-          setIsLoading(false);
-        }}
-        style={{ 
-          width: '100%', 
-          height: '100%', 
+        onLoad={handleLoad}
+        onError={handleError}
+        style={{
+          width: '100%',
+          height: '100%',
           objectFit: 'cover',
           opacity: isLoading ? 0 : 1,
           transition: 'opacity 0.2s'
-        }} 
+        }}
       />
     </>
   );
