@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, LabelList } from 'recharts';
 import { Book, Plus, Search, Star, X, ChevronLeft, ChevronRight, BookOpen, Library, BarChart3, Edit3, Trash2, LogOut, Loader, RefreshCw, Camera } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
@@ -51,23 +51,35 @@ const STATUS_COLORS = {
   [STATUS.WANT_TO_READ]: { bg: '#f59e0b', light: '#fffbeb', text: '#d97706' }
 };
 
+// ソートオプション
+const SORT_OPTIONS = [
+  { id: 'createdAt_desc', label: '登録日（新しい順）' },
+  { id: 'createdAt_asc', label: '登録日（古い順）' },
+  { id: 'title_asc', label: 'タイトル（あいうえお順）' },
+  { id: 'title_desc', label: 'タイトル（逆順）' },
+  { id: 'author_asc', label: '著者名順' },
+  { id: 'rating_desc', label: '評価が高い順' },
+  { id: 'endDate_desc', label: '読了日（新しい順）' },
+];
+
+// 1ページあたりの本の数
+const BOOKS_PER_PAGE = 12;
+
 // 壊れた画像URLを検出
 function isBrokenUrl(url) {
   if (!url) return true;
-  // 国会図書館の古いURL（403エラー）
   if (url.includes('ndlsearch.ndl.go.jp')) return true;
   if (url.includes('iss.ndl.go.jp')) return true;
   return false;
 }
 
-// 画像コンポーネント（エラー時にフォールバック）
+// 画像コンポーネント
 function BookCover({ src, title, style = {} }) {
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const timeoutRef = useRef(null);
 
   useEffect(() => {
-    // 壊れたURLは最初からフォールバック
     if (isBrokenUrl(src)) {
       setHasError(true);
       setIsLoading(false);
@@ -77,7 +89,6 @@ function BookCover({ src, title, style = {} }) {
     setHasError(false);
     setIsLoading(true);
 
-    // 10秒タイムアウト（読み込めない場合のみ発動）
     timeoutRef.current = setTimeout(() => {
       setHasError(true);
       setIsLoading(false);
@@ -91,7 +102,6 @@ function BookCover({ src, title, style = {} }) {
   }, [src]);
 
   const handleLoad = () => {
-    // タイムアウトをキャンセル
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
@@ -101,7 +111,6 @@ function BookCover({ src, title, style = {} }) {
   };
 
   const handleError = () => {
-    // タイムアウトをキャンセル
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
@@ -208,6 +217,35 @@ async function fetchCoverFromGoogle(isbn) {
   }
 }
 
+// ソート関数
+function sortBooks(books, sortKey) {
+  const [field, direction] = sortKey.split('_');
+  const sorted = [...books].sort((a, b) => {
+    let aVal = a[field] || '';
+    let bVal = b[field] || '';
+
+    // 日本語対応のソート
+    if (field === 'title' || field === 'author') {
+      return direction === 'asc'
+        ? aVal.localeCompare(bVal, 'ja')
+        : bVal.localeCompare(aVal, 'ja');
+    }
+
+    // 数値・日付ソート
+    if (field === 'rating') {
+      aVal = a.rating || 0;
+      bVal = b.rating || 0;
+    }
+
+    if (direction === 'asc') {
+      return aVal > bVal ? 1 : -1;
+    } else {
+      return aVal < bVal ? 1 : -1;
+    }
+  });
+  return sorted;
+}
+
 export default function BookshelfApp() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -221,6 +259,8 @@ export default function BookshelfApp() {
   const [isbn, setIsbn] = useState('');
   const [statsYear, setStatsYear] = useState(new Date().getFullYear());
   const [filterStatus, setFilterStatus] = useState('all');
+  const [sortKey, setSortKey] = useState('createdAt_desc');
+  const [currentPage, setCurrentPage] = useState(1);
   const [isScanning, setIsScanning] = useState(false);
   const scannerRef = useRef(null);
 
@@ -240,7 +280,7 @@ export default function BookshelfApp() {
 
     const booksRef = collection(db, 'users', user.uid, 'books');
     const q = query(booksRef, orderBy('createdAt', 'desc'));
-    
+
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const booksData = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -253,6 +293,24 @@ export default function BookshelfApp() {
 
     return () => unsubscribe();
   }, [user]);
+
+  // フィルター・ソート・ページネーション適用
+  const processedBooks = useMemo(() => {
+    let result = filterStatus === 'all' ? books : books.filter(b => b.status === filterStatus);
+    result = sortBooks(result, sortKey);
+    return result;
+  }, [books, filterStatus, sortKey]);
+
+  const totalPages = Math.ceil(processedBooks.length / BOOKS_PER_PAGE);
+  const paginatedBooks = processedBooks.slice(
+    (currentPage - 1) * BOOKS_PER_PAGE,
+    currentPage * BOOKS_PER_PAGE
+  );
+
+  // フィルターやソートが変わったらページをリセット
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterStatus, sortKey]);
 
   const handleLogin = async () => {
     try {
@@ -282,28 +340,24 @@ export default function BookshelfApp() {
     return isbn12 + checkDigit;
   };
 
-  // バーコードスキャン開始
   const startScanner = () => {
     setIsScanning(true);
   };
 
-  // isScanning が true になったらカメラ起動
   useEffect(() => {
     if (!isScanning) return;
 
     const initScanner = async () => {
-      // DOM更新を待つ
       await new Promise(resolve => setTimeout(resolve, 100));
-      
+
       try {
         const html5QrCode = new Html5Qrcode("reader");
         scannerRef.current = html5QrCode;
-        
+
         await html5QrCode.start(
           { facingMode: "environment" },
           { fps: 10, qrbox: { width: 250, height: 150 } },
           (decodedText) => {
-            // ISBNバーコード検出
             const cleanCode = decodedText.replace(/[^0-9X]/gi, '');
             if (/^(978|979)?\d{9}[\dX]$/i.test(cleanCode)) {
               stopScanner();
@@ -323,7 +377,6 @@ export default function BookshelfApp() {
     initScanner();
   }, [isScanning]);
 
-  // バーコードスキャン停止
   const stopScanner = async () => {
     if (scannerRef.current) {
       try {
@@ -336,7 +389,6 @@ export default function BookshelfApp() {
     setIsScanning(false);
   };
 
-  // 本を検索
   const searchBook = async (isbnCode) => {
     const cleanIsbn = isbnCode.replace(/[-\s]/g, '');
     if (!/^\d{10}$|^\d{13}$/.test(cleanIsbn)) {
@@ -347,14 +399,13 @@ export default function BookshelfApp() {
     setIsSearching(true);
     try {
       const isbn13 = cleanIsbn.length === 10 ? convertIsbn10to13(cleanIsbn) : cleanIsbn;
-      
+
       let title = '';
       let author = '';
       let publisher = '';
       let cover = '';
       let pubdate = '';
 
-      // 1. 楽天ブックスAPIで検索
       try {
         const response = await fetch(
           `https://app.rakuten.co.jp/services/api/BooksBook/Search/20170404?applicationId=${RAKUTEN_APP_ID}&isbn=${isbn13}`
@@ -374,7 +425,6 @@ export default function BookshelfApp() {
         console.log('楽天API error:', e);
       }
 
-      // 2. OpenBDで補完
       if (!title) {
         try {
           const response = await fetch(`https://api.openbd.jp/v1/get?isbn=${isbn13}`);
@@ -392,7 +442,6 @@ export default function BookshelfApp() {
         }
       }
 
-      // 3. Google Booksで補完
       if (!title) {
         try {
           const response = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn13}`);
@@ -427,7 +476,7 @@ export default function BookshelfApp() {
 
   const addBook = async (bookData) => {
     if (!user) return;
-    
+
     const newBook = {
       ...bookData,
       status: STATUS.TSUNDOKU,
@@ -437,7 +486,7 @@ export default function BookshelfApp() {
       review: '',
       createdAt: new Date().toISOString()
     };
-    
+
     try {
       const bookId = Date.now().toString();
       await setDoc(doc(db, 'users', user.uid, 'books', bookId), newBook);
@@ -452,7 +501,7 @@ export default function BookshelfApp() {
 
   const updateBook = async (updatedBook) => {
     if (!user) return;
-    
+
     try {
       const { id, ...bookData } = updatedBook;
       await setDoc(doc(db, 'users', user.uid, 'books', id), bookData);
@@ -465,10 +514,9 @@ export default function BookshelfApp() {
     }
   };
 
-  // 画像のみ更新
   const updateBookCover = async (bookId, newCover) => {
     if (!user) return;
-    
+
     const bookToUpdate = books.find(b => b.id === bookId);
     if (bookToUpdate) {
       const { id, ...bookData } = bookToUpdate;
@@ -478,7 +526,7 @@ export default function BookshelfApp() {
 
   const deleteBook = async (id) => {
     if (!user) return;
-    
+
     if (confirm('この本を削除しますか？')) {
       try {
         await deleteDoc(doc(db, 'users', user.uid, 'books', id));
@@ -491,28 +539,25 @@ export default function BookshelfApp() {
     }
   };
 
-  // 画像を再取得
   const refetchCover = async (book) => {
     if (!book.isbn) return null;
-    
+
     let newCover = await fetchCoverFromRakuten(book.isbn);
     if (!newCover) newCover = await fetchCoverFromOpenBD(book.isbn);
     if (!newCover) newCover = await fetchCoverFromGoogle(book.isbn);
-    
+
     return newCover;
   };
 
-  // 画像をアップロード
   const uploadCover = async (bookId, file) => {
     if (!user) return null;
-    
+
     const storageRef = ref(storage, `covers/${user.uid}/${bookId}_${Date.now()}`);
     await uploadBytes(storageRef, file);
     const downloadURL = await getDownloadURL(storageRef);
-    
-    // Firestoreも更新
+
     await updateBookCover(bookId, downloadURL);
-    
+
     return downloadURL;
   };
 
@@ -528,8 +573,6 @@ export default function BookshelfApp() {
     }));
   };
 
-  const filteredBooks = filterStatus === 'all' ? books : books.filter(b => b.status === filterStatus);
-
   const getBarColor = (count) => {
     if (count === 0) return '#e5e7eb';
     const maxCount = Math.max(...getMonthlyStats(statsYear).map(d => d.count));
@@ -538,10 +581,19 @@ export default function BookshelfApp() {
     return '#a3e635';
   };
 
+  // 統計サマリー
+  const stats = {
+    total: books.length,
+    reading: books.filter(b => b.status === STATUS.READING).length,
+    completed: books.filter(b => b.status === STATUS.COMPLETED).length,
+    tsundoku: books.filter(b => b.status === STATUS.TSUNDOKU).length,
+    wantToRead: books.filter(b => b.status === STATUS.WANT_TO_READ).length,
+  };
+
   if (authLoading) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #faf7f5 0%, #f5f0eb 100%)' }}>
-        <Loader size={40} style={{ animation: 'spin 1s linear infinite', color: '#1e3a5f' }} />
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(180deg, #1a1209 0%, #2d1f1a 100%)' }}>
+        <Loader size={40} style={{ animation: 'spin 1s linear infinite', color: '#d4a574' }} />
         <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
       </div>
     );
@@ -549,10 +601,10 @@ export default function BookshelfApp() {
 
   if (!user) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%)', padding: '20px' }}>
-        <div style={{ background: 'white', borderRadius: '24px', padding: '48px 40px', textAlign: 'center', boxShadow: '0 20px 60px rgba(0,0,0,0.3)', maxWidth: '400px', width: '100%' }}>
-          <div style={{ width: '80px', height: '80px', borderRadius: '20px', background: 'linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 24px' }}>
-            <Library size={40} color="white" />
+      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(180deg, #1a1209 0%, #2d1f1a 100%)', padding: '20px' }}>
+        <div style={{ background: 'white', borderRadius: '24px', padding: '48px 40px', textAlign: 'center', boxShadow: '0 20px 60px rgba(0,0,0,0.5)', maxWidth: '400px', width: '100%' }}>
+          <div style={{ width: '80px', height: '80px', borderRadius: '20px', background: 'linear-gradient(135deg, #8B4513 0%, #654321 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 24px' }}>
+            <Library size={40} color="#d4a574" />
           </div>
           <h1 style={{ fontSize: '28px', fontWeight: '700', color: '#1f2937', marginBottom: '8px' }}>My Bookshelf</h1>
           <p style={{ color: '#6b7280', marginBottom: '32px', lineHeight: '1.6' }}>読書記録をクラウドに保存<br />iPhone・Mac間で同期できます</p>
@@ -571,25 +623,25 @@ export default function BookshelfApp() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #faf7f5 0%, #f5f0eb 100%)', fontFamily: "'Hiragino Kaku Gothic ProN', 'Noto Sans JP', sans-serif" }}>
+    <div style={{ minHeight: '100vh', background: 'linear-gradient(180deg, #1a1209 0%, #2d1f1a 50%, #1a1209 100%)', fontFamily: "'Hiragino Kaku Gothic ProN', 'Noto Sans JP', sans-serif" }}>
       {/* ヘッダー */}
-      <header style={{ background: 'linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%)', padding: '20px 24px', color: 'white', boxShadow: '0 4px 20px rgba(0,0,0,0.15)' }}>
+      <header style={{ background: 'linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%)', padding: '16px 20px', color: 'white', boxShadow: '0 4px 20px rgba(0,0,0,0.3)' }}>
         <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <Library size={32} strokeWidth={1.5} />
-              <h1 style={{ fontSize: '24px', fontWeight: '600', letterSpacing: '0.5px' }}>My Bookshelf</h1>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <Library size={28} strokeWidth={1.5} />
+              <h1 style={{ fontSize: '20px', fontWeight: '600' }}>My Bookshelf</h1>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               {user.photoURL && <img src={user.photoURL} alt="Profile" style={{ width: '32px', height: '32px', borderRadius: '50%' }} />}
-              <button onClick={handleLogout} style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '8px 12px', background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '6px', color: 'white', cursor: 'pointer', fontSize: '12px' }}>
+              <button onClick={handleLogout} style={{ display: 'flex', alignItems: 'center', padding: '8px', background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '6px', color: 'white', cursor: 'pointer' }}>
                 <LogOut size={16} />
               </button>
             </div>
           </div>
           <nav style={{ display: 'flex', gap: '8px' }}>
             {[{ id: 'shelf', icon: Book, label: '本棚' }, { id: 'stats', icon: BarChart3, label: '統計' }, { id: 'add', icon: Plus, label: '追加' }].map(({ id, icon: Icon, label }) => (
-              <button key={id} onClick={() => setCurrentView(id)} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 20px', borderRadius: '8px', border: 'none', background: currentView === id ? 'rgba(255,255,255,0.2)' : 'transparent', color: 'white', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}>
+              <button key={id} onClick={() => setCurrentView(id)} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '8px', border: 'none', background: currentView === id ? 'rgba(255,255,255,0.2)' : 'transparent', color: 'white', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}>
                 <Icon size={18} />{label}
               </button>
             ))}
@@ -597,165 +649,182 @@ export default function BookshelfApp() {
         </div>
       </header>
 
-      <main style={{ maxWidth: '1200px', margin: '0 auto', padding: '24px' }}>
-        {/* 本棚ビュー */}
-        {currentView === 'shelf' && (
-          <div>
-            {/* 読書中 */}
-            {books.filter(b => b.status === STATUS.READING).length > 0 && (
-              <div style={{ marginBottom: '32px', background: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)', borderRadius: '16px', padding: '20px', border: '2px solid #bfdbfe' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-                  <BookOpen size={20} style={{ color: '#2563eb' }} />
-                  <h2 style={{ fontSize: '16px', fontWeight: '600', color: '#1e40af' }}>現在読書中</h2>
-                  <span style={{ background: '#3b82f6', color: 'white', padding: '2px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: '600' }}>{books.filter(b => b.status === STATUS.READING).length}冊</span>
-                </div>
-                <div style={{ display: 'flex', gap: '16px', overflowX: 'auto', paddingBottom: '8px' }}>
-                  {books.filter(b => b.status === STATUS.READING).map(book => (
-                    <div key={book.id} onClick={() => { setSelectedBook(book); setIsModalOpen(true); }} style={{ flexShrink: 0, width: '100px', cursor: 'pointer' }}>
-                      <div style={{ aspectRatio: '2/3', borderRadius: '6px', overflow: 'hidden', boxShadow: '0 4px 15px rgba(59, 130, 246, 0.3)', position: 'relative' }}>
-                        <BookCover src={book.cover} title={book.title} />
-                      </div>
-                      <p style={{ fontSize: '11px', fontWeight: '600', color: '#1e40af', marginTop: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{book.title}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* 積読 */}
-            {books.filter(b => b.status === STATUS.TSUNDOKU).length > 0 && (
-              <div style={{ marginBottom: '32px', background: 'linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%)', borderRadius: '16px', padding: '20px', border: '2px solid #ddd6fe' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-                  <Library size={20} style={{ color: '#7c3aed' }} />
-                  <h2 style={{ fontSize: '16px', fontWeight: '600', color: '#5b21b6' }}>積読</h2>
-                  <span style={{ background: '#8b5cf6', color: 'white', padding: '2px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: '600' }}>{books.filter(b => b.status === STATUS.TSUNDOKU).length}冊</span>
-                </div>
-                <div style={{ display: 'flex', gap: '16px', overflowX: 'auto', paddingBottom: '8px' }}>
-                  {books.filter(b => b.status === STATUS.TSUNDOKU).map(book => (
-                    <div key={book.id} onClick={() => { setSelectedBook(book); setIsModalOpen(true); }} style={{ flexShrink: 0, width: '100px', cursor: 'pointer' }}>
-                      <div style={{ aspectRatio: '2/3', borderRadius: '6px', overflow: 'hidden', boxShadow: '0 4px 15px rgba(139, 92, 246, 0.3)', position: 'relative' }}>
-                        <BookCover src={book.cover} title={book.title} />
-                      </div>
-                      <p style={{ fontSize: '11px', fontWeight: '600', color: '#5b21b6', marginTop: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{book.title}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* フィルター */}
-            <div style={{ marginBottom: '24px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+      {/* 本棚ビュー */}
+      {currentView === 'shelf' && (
+        <>
+          {/* コントロールバー */}
+          <div style={{ background: 'rgba(0,0,0,0.4)', padding: '12px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px' }}>並び順:</span>
+              <select
+                value={sortKey}
+                onChange={(e) => setSortKey(e.target.value)}
+                style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.1)', color: 'white', fontSize: '13px', cursor: 'pointer' }}
+              >
+                {SORT_OPTIONS.map(opt => (
+                  <option key={opt.id} value={opt.id} style={{ background: '#333', color: 'white' }}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
               {[{ id: 'all', label: 'すべて' }, { id: STATUS.READING, label: '読書中' }, { id: STATUS.COMPLETED, label: '読了' }, { id: STATUS.TSUNDOKU, label: '積読' }, { id: STATUS.WANT_TO_READ, label: '読みたい' }].map(({ id, label }) => (
-                <button key={id} onClick={() => setFilterStatus(id)} style={{ padding: '8px 16px', borderRadius: '20px', border: '2px solid', borderColor: filterStatus === id ? '#1e3a5f' : '#d1d5db', background: filterStatus === id ? '#1e3a5f' : 'white', color: filterStatus === id ? 'white' : '#4b5563', cursor: 'pointer', fontSize: '13px', fontWeight: '500' }}>{label}</button>
+                <button
+                  key={id}
+                  onClick={() => setFilterStatus(id)}
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: '16px',
+                    border: '1px solid',
+                    borderColor: filterStatus === id ? 'white' : 'rgba(255,255,255,0.3)',
+                    background: filterStatus === id ? 'rgba(255,255,255,0.2)' : 'transparent',
+                    color: filterStatus === id ? 'white' : 'rgba(255,255,255,0.8)',
+                    cursor: 'pointer',
+                    fontSize: '12px'
+                  }}
+                >
+                  {label}
+                </button>
               ))}
             </div>
+          </div>
 
-            {/* 本棚グリッド */}
-            {filteredBooks.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '60px 20px', color: '#6b7280' }}>
+          {/* 統計バー */}
+          <div style={{ background: 'rgba(0,0,0,0.3)', padding: '10px 20px', display: 'flex', justifyContent: 'center', gap: '24px', color: 'rgba(255,255,255,0.8)', fontSize: '13px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontWeight: '700', color: 'white' }}>{stats.total}</span> 冊
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              読書中 <span style={{ fontWeight: '700', color: '#3b82f6' }}>{stats.reading}</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              積読 <span style={{ fontWeight: '700', color: '#8b5cf6' }}>{stats.tsundoku}</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              読了 <span style={{ fontWeight: '700', color: '#10b981' }}>{stats.completed}</span>
+            </div>
+          </div>
+
+          {/* 本棚 */}
+          <div style={{ padding: '30px 20px', minHeight: 'calc(100vh - 280px)' }}>
+            {paginatedBooks.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '60px 20px', color: 'rgba(255,255,255,0.6)' }}>
                 <BookOpen size={64} strokeWidth={1} style={{ margin: '0 auto 16px', opacity: 0.5 }} />
-                <p style={{ fontSize: '16px' }}>まだ本が登録されていません</p>
-                <button onClick={() => setCurrentView('add')} style={{ marginTop: '16px', padding: '12px 24px', background: '#1e3a5f', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '14px' }}>本を追加する</button>
+                <p style={{ fontSize: '16px' }}>本が登録されていません</p>
+                <button onClick={() => setCurrentView('add')} style={{ marginTop: '16px', padding: '12px 24px', background: '#d4a574', color: '#1a1209', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}>本を追加する</button>
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '20px' }}>
-                {filteredBooks.map(book => (
-                  <div key={book.id} onClick={() => { setSelectedBook(book); setIsModalOpen(true); }} style={{ cursor: 'pointer' }}>
-                    <div style={{ aspectRatio: '2/3', borderRadius: '4px', overflow: 'hidden', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', position: 'relative' }}>
-                      <BookCover src={book.cover} title={book.title} />
-                      <div style={{ position: 'absolute', top: '8px', right: '8px', padding: '4px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: '600', background: STATUS_COLORS[book.status]?.bg || '#6b7280', color: 'white' }}>{STATUS_LABELS[book.status]}</div>
-                    </div>
-                    <div style={{ marginTop: '10px' }}>
-                      <p style={{ fontSize: '13px', fontWeight: '600', color: '#1f2937', lineHeight: '1.4', overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{book.title}</p>
-                      <p style={{ fontSize: '11px', color: '#6b7280', marginTop: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{book.author}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <>
+                {/* 棚1段目 */}
+                <Shelf books={paginatedBooks.slice(0, 6)} onBookClick={(book) => { setSelectedBook(book); setIsModalOpen(true); }} />
+                {/* 棚2段目 */}
+                {paginatedBooks.length > 6 && (
+                  <Shelf books={paginatedBooks.slice(6, 12)} onBookClick={(book) => { setSelectedBook(book); setIsModalOpen(true); }} />
+                )}
+              </>
             )}
           </div>
-        )}
 
-        {/* 統計ビュー */}
-        {currentView === 'stats' && (
-          <div>
-            <div style={{ background: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.08)' }}>
-              <h2 style={{ fontSize: '18px', fontWeight: '600', color: '#1f2937', marginBottom: '20px' }}>読み終わった本</h2>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '24px', marginBottom: '24px' }}>
-                <button onClick={() => setStatsYear(y => y - 1)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#3b82f6', padding: '8px' }}><ChevronLeft size={24} /></button>
-                <span style={{ fontSize: '20px', fontWeight: '600', color: '#3b82f6' }}>{statsYear}年</span>
-                <button onClick={() => setStatsYear(y => y + 1)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#3b82f6', padding: '8px' }}><ChevronRight size={24} /></button>
+          {/* ページネーション */}
+          {totalPages > 1 && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '16px', padding: '20px', color: 'white' }}>
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                style={{
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '50%',
+                  border: '2px solid rgba(255,255,255,0.3)',
+                  background: 'rgba(255,255,255,0.1)',
+                  color: 'white',
+                  fontSize: '18px',
+                  cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
+                  opacity: currentPage === 1 ? 0.5 : 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+              >
+                <ChevronLeft size={20} />
+              </button>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                {Array.from({ length: totalPages }, (_, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setCurrentPage(i + 1)}
+                    style={{
+                      width: '10px',
+                      height: '10px',
+                      borderRadius: '50%',
+                      border: 'none',
+                      background: currentPage === i + 1 ? 'white' : 'rgba(255,255,255,0.3)',
+                      cursor: 'pointer'
+                    }}
+                  />
+                ))}
               </div>
-              <div style={{ height: '300px' }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={getMonthlyStats(statsYear)} margin={{ top: 30, right: 10, left: 10, bottom: 5 }}>
-                    <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6b7280' }} />
-                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#9ca3af' }} />
-                    <Bar dataKey="count" radius={[4, 4, 0, 0]} maxBarSize={40}>
-                      <LabelList dataKey="count" position="top" style={{ fontSize: '12px', fill: '#4b5563', fontWeight: '600' }} formatter={(value) => value > 0 ? value : ''} />
-                      {getMonthlyStats(statsYear).map((entry, index) => <Cell key={`cell-${index}`} fill={getBarColor(entry.count)} />)}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-              <div style={{ marginTop: '24px', padding: '16px', background: '#f8fafc', borderRadius: '8px', textAlign: 'center' }}>
-                <span style={{ color: '#6b7280', fontSize: '14px' }}>年間読了数</span>
-                <span style={{ display: 'block', fontSize: '36px', fontWeight: '700', color: '#1e3a5f', marginTop: '4px' }}>{getMonthlyStats(statsYear).reduce((sum, m) => sum + m.count, 0)}<span style={{ fontSize: '16px', fontWeight: '500' }}> 冊</span></span>
-              </div>
+              <span style={{ fontSize: '14px', color: 'rgba(255,255,255,0.8)' }}>{currentPage} / {totalPages} ページ</span>
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                style={{
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '50%',
+                  border: '2px solid rgba(255,255,255,0.3)',
+                  background: 'rgba(255,255,255,0.1)',
+                  color: 'white',
+                  fontSize: '18px',
+                  cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
+                  opacity: currentPage === totalPages ? 0.5 : 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+              >
+                <ChevronRight size={20} />
+              </button>
             </div>
+          )}
+        </>
+      )}
 
-            {/* 月別読了本一覧 */}
-            <div style={{ background: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.08)', marginTop: '24px' }}>
-              <h2 style={{ fontSize: '18px', fontWeight: '600', color: '#1f2937', marginBottom: '20px' }}>{statsYear}年の読了本</h2>
-              {(() => {
-                const completedBooks = books.filter(book => {
-                  if (!book.endDate || book.status !== STATUS.COMPLETED) return false;
-                  const endDate = new Date(book.endDate);
-                  return endDate.getFullYear() === statsYear;
-                });
-                if (completedBooks.length === 0) return <p style={{ color: '#9ca3af', textAlign: 'center', padding: '20px' }}>この年に読了した本はありません</p>;
-                const monthNames = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
-                const booksByMonth = {};
-                completedBooks.forEach(book => {
-                  const month = new Date(book.endDate).getMonth();
-                  if (!booksByMonth[month]) booksByMonth[month] = [];
-                  booksByMonth[month].push(book);
-                });
-                const sortedMonths = Object.keys(booksByMonth).map(Number).sort((a, b) => b - a);
-                return sortedMonths.map(month => (
-                  <div key={month} style={{ marginBottom: '24px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-                      <span style={{ background: '#3b82f6', color: 'white', padding: '4px 12px', borderRadius: '12px', fontSize: '13px', fontWeight: '600' }}>{monthNames[month]}</span>
-                      <span style={{ color: '#6b7280', fontSize: '13px' }}>{booksByMonth[month].length}冊</span>
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      {booksByMonth[month].sort((a, b) => new Date(b.endDate) - new Date(a.endDate)).map(book => (
-                        <div key={book.id} onClick={() => { setSelectedBook(book); setIsModalOpen(true); }} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px', background: '#f8fafc', borderRadius: '8px', cursor: 'pointer' }}>
-                          <div style={{ width: '40px', height: '60px', borderRadius: '4px', overflow: 'hidden', flexShrink: 0, position: 'relative' }}>
-                            <BookCover src={book.cover} title={book.title} />
-                          </div>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <p style={{ fontSize: '14px', fontWeight: '600', color: '#1f2937', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{book.title}</p>
-                            <p style={{ fontSize: '12px', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{book.author}</p>
-                          </div>
-                          {book.rating > 0 && <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}><Star size={14} fill="#fbbf24" stroke="#fbbf24" /><span style={{ fontSize: '12px', color: '#6b7280' }}>{book.rating}</span></div>}
-                          <span style={{ fontSize: '11px', color: '#9ca3af', flexShrink: 0 }}>{new Date(book.endDate).getDate()}日</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ));
-              })()}
+      {/* 統計ビュー */}
+      {currentView === 'stats' && (
+        <main style={{ maxWidth: '1200px', margin: '0 auto', padding: '24px' }}>
+          <div style={{ background: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.08)' }}>
+            <h2 style={{ fontSize: '18px', fontWeight: '600', color: '#1f2937', marginBottom: '20px' }}>読み終わった本</h2>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '24px', marginBottom: '24px' }}>
+              <button onClick={() => setStatsYear(y => y - 1)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#3b82f6', padding: '8px' }}><ChevronLeft size={24} /></button>
+              <span style={{ fontSize: '20px', fontWeight: '600', color: '#3b82f6' }}>{statsYear}年</span>
+              <button onClick={() => setStatsYear(y => y + 1)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#3b82f6', padding: '8px' }}><ChevronRight size={24} /></button>
+            </div>
+            <div style={{ height: '300px' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={getMonthlyStats(statsYear)} margin={{ top: 30, right: 10, left: 10, bottom: 5 }}>
+                  <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6b7280' }} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#9ca3af' }} />
+                  <Bar dataKey="count" radius={[4, 4, 0, 0]} maxBarSize={40}>
+                    <LabelList dataKey="count" position="top" style={{ fontSize: '12px', fill: '#4b5563', fontWeight: '600' }} formatter={(value) => value > 0 ? value : ''} />
+                    {getMonthlyStats(statsYear).map((entry, index) => <Cell key={`cell-${index}`} fill={getBarColor(entry.count)} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={{ marginTop: '24px', padding: '16px', background: '#f8fafc', borderRadius: '8px', textAlign: 'center' }}>
+              <span style={{ color: '#6b7280', fontSize: '14px' }}>年間読了数</span>
+              <span style={{ display: 'block', fontSize: '36px', fontWeight: '700', color: '#1e3a5f', marginTop: '4px' }}>{getMonthlyStats(statsYear).reduce((sum, m) => sum + m.count, 0)}<span style={{ fontSize: '16px', fontWeight: '500' }}> 冊</span></span>
             </div>
           </div>
-        )}
+        </main>
+      )}
 
-        {/* 追加ビュー */}
-        {currentView === 'add' && (
+      {/* 追加ビュー */}
+      {currentView === 'add' && (
+        <main style={{ maxWidth: '600px', margin: '0 auto', padding: '24px' }}>
           <div style={{ background: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.08)' }}>
             <h2 style={{ fontSize: '18px', fontWeight: '600', color: '#1f2937', marginBottom: '20px' }}>本を追加</h2>
-            
-            {/* バーコードスキャナー */}
+
             {isScanning ? (
               <div style={{ marginBottom: '24px' }}>
                 <div id="reader" style={{ width: '100%', maxWidth: '400px', margin: '0 auto' }}></div>
@@ -783,25 +852,86 @@ export default function BookshelfApp() {
             </div>
             {searchResult && <SearchResultCard result={searchResult} onAdd={addBook} onCancel={() => setSearchResult(null)} />}
           </div>
-        )}
-      </main>
+        </main>
+      )}
 
       {/* 本詳細モーダル */}
       {isModalOpen && selectedBook && (
-        <BookDetailModal 
-          book={selectedBook} 
-          isEditMode={isEditMode} 
-          onClose={() => { setIsModalOpen(false); setSelectedBook(null); setIsEditMode(false); }} 
-          onEdit={() => setIsEditMode(true)} 
-          onSave={updateBook} 
+        <BookDetailModal
+          book={selectedBook}
+          isEditMode={isEditMode}
+          onClose={() => { setIsModalOpen(false); setSelectedBook(null); setIsEditMode(false); }}
+          onEdit={() => setIsEditMode(true)}
+          onSave={updateBook}
           onDelete={deleteBook}
           onRefetchCover={refetchCover}
           onUpdateCover={updateBookCover}
           onUploadCover={uploadCover}
         />
       )}
-      
+
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+// 木目本棚コンポーネント
+function Shelf({ books, onBookClick }) {
+  return (
+    <div style={{ marginBottom: '20px', maxWidth: '900px', marginLeft: 'auto', marginRight: 'auto' }}>
+      <div style={{ display: 'flex', gap: '16px', padding: '20px 30px 15px', alignItems: 'flex-end', justifyContent: 'center', minHeight: '180px' }}>
+        {books.map(book => (
+          <div
+            key={book.id}
+            onClick={() => onBookClick(book)}
+            style={{ width: '100px', cursor: 'pointer', transition: 'transform 0.2s' }}
+            onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-10px)'}
+            onMouseLeave={(e) => e.currentTarget.style.transform = 'translateY(0)'}
+          >
+            <div style={{
+              width: '100px',
+              height: '150px',
+              borderRadius: '3px',
+              boxShadow: '4px 4px 12px rgba(0,0,0,0.6), -1px 0 3px rgba(0,0,0,0.3)',
+              overflow: 'hidden',
+              position: 'relative'
+            }}>
+              <BookCover src={book.cover} title={book.title} />
+              <div style={{
+                position: 'absolute',
+                top: '6px',
+                right: '6px',
+                padding: '3px 6px',
+                borderRadius: '4px',
+                fontSize: '9px',
+                fontWeight: '600',
+                color: 'white',
+                background: STATUS_COLORS[book.status]?.bg || '#6b7280'
+              }}>
+                {STATUS_LABELS[book.status]}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      {/* 棚板 */}
+      <div style={{
+        height: '18px',
+        background: 'linear-gradient(180deg, #b8860b 0%, #8B4513 20%, #654321 50%, #4a3520 80%, #3d2817 100%)',
+        borderRadius: '3px',
+        boxShadow: '0 6px 12px rgba(0,0,0,0.5), inset 0 2px 4px rgba(255,255,255,0.1)',
+        position: 'relative'
+      }}>
+        <div style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: '3px',
+          background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%)',
+          borderRadius: '3px 3px 0 0'
+        }} />
+      </div>
     </div>
   );
 }
@@ -879,12 +1009,12 @@ function BookDetailModal({ book, isEditMode, onClose, onEdit, onSave, onDelete, 
   const handleFileSelect = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    
+
     if (!file.type.startsWith('image/')) {
       alert('画像ファイルを選択してください');
       return;
     }
-    
+
     setIsUploading(true);
     try {
       const newCover = await onUploadCover(editedBook.id, file);
@@ -901,14 +1031,13 @@ function BookDetailModal({ book, isEditMode, onClose, onEdit, onSave, onDelete, 
   };
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 1000 }}>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 1000 }}>
       <div style={{ background: 'white', borderRadius: '16px', maxWidth: '500px', width: '100%', maxHeight: '90vh', overflow: 'auto', position: 'relative' }}>
         <button onClick={onClose} style={{ position: 'absolute', top: '16px', right: '16px', background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', zIndex: 10 }}><X size={24} /></button>
-        <div style={{ background: 'linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%)', padding: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <div style={{ width: '120px', aspectRatio: '2/3', borderRadius: '4px', overflow: 'hidden', boxShadow: '0 8px 25px rgba(0,0,0,0.3)', position: 'relative' }}>
+        <div style={{ background: 'linear-gradient(135deg, #654321 0%, #8B4513 100%)', padding: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <div style={{ width: '120px', aspectRatio: '2/3', borderRadius: '4px', overflow: 'hidden', boxShadow: '0 8px 25px rgba(0,0,0,0.5)', position: 'relative' }}>
             <BookCover src={editedBook.cover} title={editedBook.title} />
           </div>
-          {/* 画像操作ボタン */}
           <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
             <button
               onClick={handleRefetchCover}
@@ -1014,7 +1143,7 @@ function BookDetailModal({ book, isEditMode, onClose, onEdit, onSave, onDelete, 
             ) : (
               <>
                 <button onClick={onEdit} style={{ flex: 1, padding: '12px 24px', background: '#f3f4f6', color: '#4b5563', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '500', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}><Edit3 size={16} />編集</button>
-                <button onClick={() => onSave(editedBook)} style={{ flex: 1, padding: '12px 24px', background: '#1e3a5f', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}>更新</button>
+                <button onClick={() => onSave(editedBook)} style={{ flex: 1, padding: '12px 24px', background: '#654321', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}>更新</button>
               </>
             )}
           </div>
