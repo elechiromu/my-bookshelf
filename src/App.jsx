@@ -713,14 +713,7 @@ export default function BookshelfApp() {
                 <button onClick={() => setCurrentView('add')} style={{ marginTop: '16px', padding: '12px 24px', background: '#d4a574', color: '#1a1209', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}>本を追加する</button>
               </div>
             ) : (
-              <>
-                {/* 棚1段目 */}
-                <Shelf books={paginatedBooks.slice(0, 6)} onBookClick={(book) => { setSelectedBook(book); setIsModalOpen(true); }} />
-                {/* 棚2段目 */}
-                {paginatedBooks.length > 6 && (
-                  <Shelf books={paginatedBooks.slice(6, 12)} onBookClick={(book) => { setSelectedBook(book); setIsModalOpen(true); }} />
-                )}
-              </>
+              <Shelf books={paginatedBooks} onBookClick={(book) => { setSelectedBook(book); setIsModalOpen(true); }} />
             )}
           </div>
 
@@ -875,63 +868,91 @@ export default function BookshelfApp() {
   );
 }
 
-// 木目本棚コンポーネント
+// 木目本棚コンポーネント（レスポンシブ対応）
 function Shelf({ books, onBookClick }) {
+  const [booksPerRow, setBooksPerRow] = useState(4);
+
+  useEffect(() => {
+    const updateBooksPerRow = () => {
+      setBooksPerRow(window.innerWidth < 500 ? 4 : window.innerWidth < 800 ? 5 : 6);
+    };
+    updateBooksPerRow();
+    window.addEventListener('resize', updateBooksPerRow);
+    return () => window.removeEventListener('resize', updateBooksPerRow);
+  }, []);
+
+  // 本を行に分割
+  const rows = [];
+  for (let i = 0; i < books.length; i += booksPerRow) {
+    rows.push(books.slice(i, i + booksPerRow));
+  }
+
   return (
-    <div style={{ marginBottom: '20px', maxWidth: '900px', marginLeft: 'auto', marginRight: 'auto' }}>
-      <div style={{ display: 'flex', gap: '16px', padding: '20px 30px 15px', alignItems: 'flex-end', justifyContent: 'center', minHeight: '180px' }}>
-        {books.map(book => (
-          <div
-            key={book.id}
-            onClick={() => onBookClick(book)}
-            style={{ width: '100px', cursor: 'pointer', transition: 'transform 0.2s' }}
-            onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-10px)'}
-            onMouseLeave={(e) => e.currentTarget.style.transform = 'translateY(0)'}
-          >
-            <div style={{
-              width: '100px',
-              height: '150px',
-              borderRadius: '3px',
-              boxShadow: '4px 4px 12px rgba(0,0,0,0.6), -1px 0 3px rgba(0,0,0,0.3)',
-              overflow: 'hidden',
-              position: 'relative'
-            }}>
-              <BookCover src={book.cover} title={book.title} />
-              <div style={{
-                position: 'absolute',
-                top: '6px',
-                right: '6px',
-                padding: '3px 6px',
-                borderRadius: '4px',
-                fontSize: '9px',
-                fontWeight: '600',
-                color: 'white',
-                background: STATUS_COLORS[book.status]?.bg || '#6b7280'
-              }}>
-                {STATUS_LABELS[book.status]}
+    <div style={{ maxWidth: '100%', padding: '0 10px' }}>
+      {rows.map((rowBooks, rowIndex) => (
+        <div key={rowIndex} style={{ marginBottom: '15px' }}>
+          {/* 本の行 */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(70px, 1fr))',
+            gap: '8px',
+            padding: '15px 10px 10px',
+            maxWidth: '600px',
+            margin: '0 auto'
+          }}>
+            {rowBooks.map(book => (
+              <div
+                key={book.id}
+                onClick={() => onBookClick(book)}
+                style={{ cursor: 'pointer' }}
+              >
+                <div style={{
+                  aspectRatio: '2/3',
+                  borderRadius: '3px',
+                  boxShadow: '3px 3px 8px rgba(0,0,0,0.5), -1px 0 2px rgba(0,0,0,0.3)',
+                  overflow: 'hidden',
+                  position: 'relative'
+                }}>
+                  <BookCover src={book.cover} title={book.title} />
+                  <div style={{
+                    position: 'absolute',
+                    top: '4px',
+                    right: '4px',
+                    padding: '2px 5px',
+                    borderRadius: '3px',
+                    fontSize: '8px',
+                    fontWeight: '600',
+                    color: 'white',
+                    background: STATUS_COLORS[book.status]?.bg || '#6b7280'
+                  }}>
+                    {STATUS_LABELS[book.status]}
+                  </div>
+                </div>
               </div>
-            </div>
+            ))}
           </div>
-        ))}
-      </div>
-      {/* 棚板 */}
-      <div style={{
-        height: '18px',
-        background: 'linear-gradient(180deg, #b8860b 0%, #8B4513 20%, #654321 50%, #4a3520 80%, #3d2817 100%)',
-        borderRadius: '3px',
-        boxShadow: '0 6px 12px rgba(0,0,0,0.5), inset 0 2px 4px rgba(255,255,255,0.1)',
-        position: 'relative'
-      }}>
-        <div style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          height: '3px',
-          background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%)',
-          borderRadius: '3px 3px 0 0'
-        }} />
-      </div>
+          {/* 棚板 */}
+          <div style={{
+            height: '14px',
+            background: 'linear-gradient(180deg, #b8860b 0%, #8B4513 20%, #654321 50%, #4a3520 80%, #3d2817 100%)',
+            borderRadius: '2px',
+            boxShadow: '0 4px 8px rgba(0,0,0,0.4), inset 0 1px 2px rgba(255,255,255,0.1)',
+            maxWidth: '620px',
+            margin: '0 auto',
+            position: 'relative'
+          }}>
+            <div style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              height: '2px',
+              background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%)',
+              borderRadius: '2px 2px 0 0'
+            }} />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
